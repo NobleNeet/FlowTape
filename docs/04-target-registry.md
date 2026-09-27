@@ -411,3 +411,52 @@ Normal creation/update paths are:
 - Rebind/repair
 
 Users may hand-edit it, but they should not be required to write complex DOM definitions from scratch.
+
+## 17. Initial ownership model
+
+For the first implementation, one scenario should normally own one corresponding DOM registry rather than sharing one global `elements.yaml` across unrelated scenarios.
+
+Acceptable packaging patterns include for example:
+
+```text
+login/
+  scenario.yaml
+  elements.yaml
+```
+
+or an equivalent clearly paired naming convention.
+
+This keeps target-name collisions, repair impact, portability, and deletion semantics local and predictable. Shared site/project registries may be introduced later as an explicit feature rather than assumed from the beginning.
+
+## 18. Rename semantics
+
+Renaming a logical target through the FlowTape UI is an atomic semantic operation:
+
+```text
+old registry key
+    -> new registry key
+    -> update all references in the associated scenario
+```
+
+The UI must not leave known scenario references pointing at the old name after a successful rename.
+
+External/manual edits may still create unresolved references; validation reports those as normal unbound-target errors.
+
+## 19. Delete semantics
+
+Deleting a registered target must account for references from the associated scenario.
+
+If the target is still referenced, the UI should either:
+
+- block deletion and show the referencing steps/conditions, or
+- require an explicit destructive confirmation that leaves those references unbound
+
+Silent deletion of a referenced target is not allowed.
+
+## 20. Collection definitions
+
+`for_each` source definitions are semantically different from ordinary single-element targets.
+
+A collection source may be captured by selecting one representative item and deriving candidate definitions that match the corresponding set. Before persistence, FlowTape should preview/highlight the resulting current members and let the user confirm the intended collection.
+
+Collection resolution must not inherit the single-target rule that exactly one element must remain. Its validation instead checks that the source definition denotes the intended iterable set according to the collection schema.
