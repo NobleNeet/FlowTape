@@ -11,6 +11,8 @@ The FlowTape scenario language serves two roles at once:
 
 The language therefore favors semantic browser operations over Selenium-specific implementation details.
 
+FlowTape may also collect small amounts of structured data as part of a browser workflow. This is intentionally lightweight: DOM values are read through ordinary targets and explicitly appended to scenario result files rather than turning the DSL into a general scraping/programming language.
+
 ## 2. Vocabulary policy
 
 Reserved keys and conventional browser-action names use English when the term is concise and widely understood.
@@ -22,6 +24,7 @@ Examples:
 - `input`
 - `select`
 - `read`
+- `append`
 - `wait`
 - `check`
 - `if`
@@ -75,6 +78,20 @@ steps:
     target: ログイン
 ```
 
+A scenario may optionally declare named result outputs:
+
+```yaml
+outputs:
+  ticket_log:
+    format: csv
+    file: ticket_log.csv
+    existing: new
+    columns:
+      - ticket_id
+      - author
+      - subject
+```
+
 The scenario-local `elements.yaml` is implicitly associated through the containing scenario directory and normally does not need to be referenced explicitly.
 
 ## 4. Execution modes
@@ -93,6 +110,8 @@ Validation without performing the actual mutating browser operation. The engine 
 - the element is visible/enabled/editable where required
 - expected kind/type is compatible with the action
 - current page/window context is valid
+
+Exact behavior of result-producing actions in each mode is defined in the runtime-semantics specification.
 
 ### 4.3 `デバッグ`
 
@@ -225,7 +244,9 @@ Supported v1 read sources are `text`, `value`, and an explicit attribute.
   into: download_url
 ```
 
-The resulting variable becomes a runtime variable.
+The resulting value becomes a runtime variable and may be used by later browser actions, conditions, or explicit output actions.
+
+`read` does not itself write a result file. Data extraction and result persistence remain separate primitives.
 
 ### 8.7 Upload
 
@@ -300,6 +321,42 @@ JavaScript `alert`, `confirm`, and `prompt` are browser context, not DOM targets
 
 `alert_input` supplies the prompt value; an explicit accept may follow where required by the implementation semantics.
 
+### 8.12 Append result data
+
+`append` writes one explicit result record/line to a named scenario output.
+
+For structured outputs such as CSV or JSON Lines:
+
+```yaml
+- action: append
+  output: ticket_log
+  values:
+    ticket_id: ${ticket_id}
+    author: ${author}
+    subject: ${subject}
+```
+
+For text output:
+
+```yaml
+- action: append
+  output: processing_log
+  value: "${ticket_id}: ${author}"
+```
+
+`append` is deliberately separate from `read` so a collected value may be checked, transformed through ordinary scenario flow, reused in browser operations, or written to more than one result.
+
+An `append` execution has observable external effect: when it succeeds, one record/line has been added. Re-executing the same step may therefore produce a duplicate record. v1 does not silently deduplicate or upsert output rows.
+
+Credential references are forbidden in result values. For example, this is invalid:
+
+```yaml
+- action: append
+  output: dump
+  values:
+    password: ${credential.example.password}
+```
+
 ## 9. Wait and check
 
 `wait` and `check` are distinct.
@@ -365,7 +422,7 @@ ${credential.社内システム.username}
 ${credential.社内システム.password}
 ```
 
-Credential values must not be persisted into ordinary scenario steps, logs, diagnostics, or exception text after expansion. Recorder capture of password inputs must not serialize the entered plaintext password into `scenario.yaml`.
+Credential values must not be persisted into ordinary scenario steps, logs, diagnostics, exception text, or scenario result outputs after expansion. Recorder capture of password inputs must not serialize the entered plaintext password into `scenario.yaml`.
 
 The expected corporate environment may reset environment variables at logoff, so OS environment variables are not a required credential mechanism in v1.
 
@@ -607,9 +664,111 @@ Visible step numbers are presentation-only and are not persistent identity.
 
 ## 19. Optional human-readable descriptions
 
-Steps and structural blocks may carry semantically inert human-readable notes/descriptions for procedure-document readability. The implementation may standardize a key such as `description`; the value has no execution meaning in v1.
+Steps and structural blocks may carry semantically inert human-readable notes/descriptions for procedure-document readability. The standardized v1 key is `description`; the value has no execution meaning.
 
-## 20. Playback control is not scenario mode
+## 20. Scenario result outputs
+
+Scenario outputs are explicit user-requested execution artifacts, distinct from FlowTape diagnostic/system logs.
+
+### 20.1 Output declaration
+
+Outputs are declared by logical name at the scenario top level:
+
+```yaml
+outputs:
+  ticket_log:
+    format: csv
+    file: ticket_log.csv
+    existing: new
+    columns:
+      - ticket_id
+      - author
+      - subject
+```
+
+Supported v1 formats are:
+
+```text
+csv
+jsonl
+text
+```
+
+CSV requires a fixed ordered `columns` list. `append.values` keys must match those declared columns so misspellings can be caught before execution.
+
+JSON Lines writes one JSON object per `append` action. It does not require a fixed column list.
+
+Text output writes one textual line per `append` action.
+
+### 20.2 Existing-file policy
+
+Supported `existing` values:
+
+- `new` — default; do not overwrite a previous run's result
+- `append` — append to the configured existing output
+- `overwrite` — replace the output at run initialization
+
+The normal recommended policy is `new`.
+
+### 20.3 Output root and run isolation
+
+Scenario YAML normally contains only a relative output filename such as:
+
+```yaml
+file: ticket_log.csv
+```
+
+Environment-specific root directories belong in `config.yaml`.
+
+For `existing: new`, the runtime should place results in a run-specific location or otherwise generate a non-colliding result path. The exact naming convention is a runtime concern, but a previous run's file must not be silently overwritten.
+
+### 20.4 Incremental durability
+
+Result records should be committed as `append` actions execute rather than retained only in memory until the scenario finishes.
+
+This allows a partially completed run to retain already collected rows if a later browser step fails or the run is stopped.
+
+Runtime buffering is allowed for efficiency only if it preserves equivalent practical durability and flush behavior.
+
+### 20.5 Retry and duplicate semantics
+
+`append` means append. Re-running an already completed `append` step may produce another row/line.
+
+FlowTape v1 does not silently infer a primary key, deduplicate records, or perform an upsert. UI/runtime diagnostics should warn where re-executing an output-producing step may create duplicates.
+
+### 20.6 Diagnostics separation
+
+Collected business/user data belongs in declared outputs, not automatically in FlowTape's diagnostic log.
+
+Normal diagnostics may report that a `read` or `append` succeeded without logging the extracted value itself.
+
+Credential values must never be written to declared outputs.
+
+## 21. Authoring read/output steps
+
+Ordinary human browsing does not reveal an intent to collect data. Therefore Recorder must not infer a `read` or `append` step merely because the user looked at an element.
+
+The Scenario Editor should provide explicit authoring flows such as:
+
+```text
+値を取得
+  -> browser picker
+  -> select target
+  -> choose source (text/value/attribute)
+  -> choose runtime variable name
+```
+
+and:
+
+```text
+結果へ記録
+  -> choose/create output
+  -> map runtime values to fields
+```
+
+These flows reuse the same Element Picker / Element Capture Engine used by target binding. The picker click itself is not a scenario browser-operation step.
+
+## 22. Playback control is not scenario mode
 
 Playback pacing remains runtime/editor state rather than scenario semantics.
 
@@ -624,7 +783,7 @@ Examples:
 
 These controls do not redefine `mode: 実行/確認/デバッグ`.
 
-## 21. Explicit exclusions
+## 23. Explicit exclusions
 
 Initial DSL design excludes:
 
@@ -634,57 +793,68 @@ Initial DSL design excludes:
 - silent implicit fallback to the first DOM/page/window match
 - mandatory raw CSS/XPath authoring in scenario steps
 - native OS-dialog automation as ordinary DOM actions
+- general-purpose scraping transforms/query languages
+- automatic statistical aggregation as part of the v1 DSL
 
-## 22. Example scenario
+Output files are intended to be processed by normal external tools such as spreadsheet software or scripts after the run when aggregation is needed.
+
+## 24. Example scenario
 
 ```yaml
 version: 1
-name: 商品検索と明細処理
+name: Redmineチケット処理
 mode: 実行
 
-variables:
-  search_word: RTX 5090
+outputs:
+  tickets:
+    format: csv
+    file: tickets.csv
+    existing: new
+    columns:
+      - id
+      - author
+      - assignee
+      - status
 
 steps:
-  - action: open
-    url: https://example.com
+  - for_each:
+      target: チケット一覧/行
+      as: row
+      steps:
+        - action: click
+          target: チケットを開く
+          within: ${row}
 
-  - action: input
-    target: 検索欄
-    value: ${search_word}
+        - action: read
+          target: チケット番号
+          source: text
+          into: id
 
-  - action: key
-    target: 検索欄
-    key: ENTER
+        - action: read
+          target: 起票者
+          source: text
+          into: author
 
-  - action: wait
-    until:
-      page: search_results
-    timeout: 10s
+        - action: read
+          target: 担当者
+          source: text
+          into: assignee
 
-  - if:
-      exists: 商品一覧
-    then:
-      - for_each:
-          target: 商品一覧/行
-          as: row
-          max_iterations: 1000
-          timeout: 5m
-          steps:
-            - action: read
-              target: 商品名
-              within: ${row}
-              source: text
-              into: item_name
-    else:
-      - action: read
-        target: メッセージ
-        source: text
-        into: result_message
+        - action: read
+          target: ステータス
+          source: text
+          into: status
 
-  - action: click
-    target: 注文を確定
-    risk: 破壊的
+        - action: append
+          output: tickets
+          values:
+            id: ${id}
+            author: ${author}
+            assignee: ${assignee}
+            status: ${status}
+
+        - action: click
+          target: 所定の処理
 ```
 
 DOM mechanics remain in the scenario-local page-scoped target registry.
