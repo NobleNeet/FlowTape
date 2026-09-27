@@ -53,7 +53,7 @@ The Recorder should not force the user to define branching logic while demonstra
 The intended responsibility split is:
 
 - Recorder: capture linear browser operations and acquire/reacquire DOM targets
-- Scenario Editor: add or modify control-flow semantics such as conditions, loops, grouping, and alternate branches after recording
+- Scenario Editor: add or modify control-flow semantics such as conditions, loops, and alternate branches after recording
 
 Both may live in the same FlowTape application window, but their responsibilities should remain conceptually distinct.
 
@@ -81,12 +81,14 @@ Conceptual appearance:
 ```text
 01  Open      https://example.com
 02  Input     メールアドレス = test@example.com
-03  Input     パスワード = ${PASSWORD}
+03  Input     パスワード = ${credential.社内システム.password}
 04  Click     ログイン
 05  Click     次へ
 06  Click     次へ
 07  Click     完了
 ```
+
+When a password field has been recorded but no credential reference has yet been assigned, the UI should display an explicit unresolved/credential-required state rather than the captured plaintext value.
 
 Each row should expose the operation in human-readable terms rather than raw Selenium details.
 
@@ -367,11 +369,12 @@ After selecting a contiguous range, the UI should offer operations such as:
 ```text
 条件付きにする
 繰り返しにする
-グループ化
 削除
 ```
 
 The user should not be required to draw block brackets manually.
+
+v1 has no persisted `GroupNode`. A future visual-only grouping affordance must not be serialized as an unsupported scenario node unless the schema is explicitly extended.
 
 For `if`, the `else` branch is added deliberately through an action such as `それ以外を追加`; an empty `else` branch is not created automatically.
 
@@ -493,6 +496,8 @@ The Recorder should preserve the user's semantic action, not the browser's low-l
 A normal link/button click that causes page navigation remains primarily the click step. The resulting navigation should not normally create a second redundant `open` step.
 
 Explicit navigation actions such as direct URL opening, back, forward, refresh, or meaningful window/tab context changes are separate scenario operations.
+
+Detailed event normalization, IME handling, double-click coalescing, and navigation snapshot rules are defined in `08-recorder-protocol.md`.
 
 ## 25. Tabs, windows, frames, and context
 
