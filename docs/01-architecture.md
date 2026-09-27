@@ -4,7 +4,7 @@ Status: initial specification before implementation
 
 ## 1. High-level structure
 
-FlowTape is divided into UI, scenario/domain, DOM-resolution, and browser-execution layers.
+FlowTape is divided into UI, scenario/domain, page/DOM-resolution, browser-context, and browser-execution layers.
 
 ```text
 +--------------------+
@@ -18,30 +18,32 @@ FlowTape is divided into UI, scenario/domain, DOM-resolution, and browser-execut
 | Validator          |
 +---------+----------+
           |
-          +-------------------+
-          |                   |
-          v                   v
-+--------------------+  +--------------------+
-| DOM Registry       |  | Control Flow       |
-| elements.yaml      |  | if / loops / vars  |
-+---------+----------+  +---------+----------+
-          |                       |
-          +-----------+-----------+
-                      v
-              +---------------+
-              | Player        |
-              | TargetResolver|
-              +-------+-------+
-                      |
-                      v
-              +---------------+
-              | Selenium      |
-              +-------+-------+
-                      |
-                      v
-              +---------------+
-              | Edge/Browser  |
-              +---------------+
+          +------------------------+
+          |                        |
+          v                        v
++--------------------+    +--------------------+
+| Page + DOM Registry|    | Control Flow       |
+| elements.yaml      |    | if / loops / vars  |
++---------+----------+    +---------+----------+
+          |                         |
+          +------------+------------+
+                       v
+              +--------------------+
+              | Player             |
+              | PageIdentifier     |
+              | TargetResolver     |
+              | WindowContext      |
+              +---------+----------+
+                        |
+                        v
+                  +-----------+
+                  | Selenium  |
+                  +-----+-----+
+                        |
+                        v
+                  +-----------+
+                  | Edge      |
+                  +-----------+
 ```
 
 The Recorder additionally uses browser-injected JavaScript to observe user operations and inspect DOM details.
@@ -58,8 +60,8 @@ Responsibilities:
 - show current recording state
 - allow step selection
 - open target information/editing
-- invoke element picking/binding
-- hand the captured event to the Element Capture Engine
+- invoke element picking/binding/rebinding
+- hand captured browser events to normalization and the Element Capture Engine
 
 The Recorder must not own locator-generation logic directly.
 
@@ -69,12 +71,11 @@ Responsibilities:
 
 - display scenario steps in execution order
 - edit action parameters
-- select a contiguous step range
+- select contiguous step ranges
 - wrap ranges in structural blocks
-- configure `if`, `else`, loop, and similar behavior
+- configure `if`, `else`, `repeat`, `for_each`, and `while`
 - maintain a readable relationship between UI structure and YAML structure
-
-The normal editing model is a vertical step sequence with visible range blocks around grouped steps.
+- maintain explicit save state and undo/redo
 
 ### 2.3 Injected browser script
 
@@ -84,15 +85,15 @@ Responsibilities include:
 
 - observe pointer/click/input-related events
 - identify the immediate event target
-- collect browser-side DOM information that Selenium alone would be cumbersome to obtain repeatedly
+- collect browser-side DOM information
 - support hover/highlight/picker interaction
 - communicate captured DOM information back to Python
 
-It does not become a second execution engine. Playback remains controlled by the Python/Selenium side.
+It does not become a second execution engine. Playback remains controlled by Python/Selenium.
 
 ### 2.4 Element Capture Engine
 
-This is shared by Recorder, Picker, and Bind workflows.
+Shared by Recorder, Picker, Bind, and Rebind.
 
 Input:
 
@@ -101,188 +102,247 @@ Input:
 
 Output:
 
-- normalized operation target
+- normalized actionable target
 - logical-name suggestion
 - locator candidates
-- candidate scores and diagnostics
+- candidate scores/diagnostics
 - `expect` information
-- optional fingerprint information
-- context path such as iframe/shadow traversal
+- diagnostic fingerprint information
+- ordered iframe/shadow traversal context
 
-It must separate candidate generation from candidate scoring.
+Candidate generation and scoring remain separate stages.
 
-### 2.5 DOM Registry
+### 2.5 Page Identifier
 
-The DOM Registry persists logical target definitions, normally in `elements.yaml`.
+The Page Identifier determines which page scope in the scenario-local registry applies to the current browser document.
+
+Page definitions may use:
+
+- URL conditions
+- DOM-identification conditions
+- a combination of both
+
+Rules:
+
+- zero matching page definitions -> `UnknownPage`
+- exactly one matching page definition -> use that page scope
+- multiple matching page definitions -> `AmbiguousPage`
+
+Page identification must not guess based on ordering.
+
+### 2.6 DOM Registry
+
+The DOM Registry persists scenario-local page and target definitions in `elements.yaml`.
 
 Responsibilities:
 
-- lookup by logical target name
+- page identification definitions
+- page-scoped logical target lookup
 - persistence/versioning
-- name collision handling
-- storing locators, context, expectations, and limited fingerprint data
-- updating/rebinding an existing target
+- target name collision handling within page scope
+- storing locator candidates, ordered traversal context, expectations, and fingerprint data
+- collection definitions for `for_each`
+- updating/rebinding existing targets
 
-The registry is not the same thing as a full captured DOM snapshot.
+The registry is not a full DOM snapshot.
 
-### 2.6 Target Resolver
-
-The Player asks the Target Resolver to convert a logical target name into one acceptable current DOM element.
+### 2.7 Target Resolver
 
 Resolution order is conceptually:
 
 ```text
-logical target
-    -> load definition
-    -> enter frame/shadow context
+identify current page
+    -> load page-scoped target definition
+    -> enter ordered frame/shadow context
     -> try locator candidate
-    -> inspect match count
+    -> inspect matches
     -> validate against expect
     -> accept exactly one element
 ```
 
-If a locator yields no acceptable element, the resolver may try the next persisted locator.
+If a locator yields no acceptable element, later persisted locators may be tried. If multiple acceptable elements remain, the resolver must not choose the first implicitly.
 
-If multiple acceptable elements remain, it must not pick the first one implicitly.
+Positional/index-based definitions are allowed only as explicit fragile fallbacks.
 
-### 2.7 Player
+### 2.8 Window Context Manager
+
+The Window Context Manager tracks Selenium window handles and FlowTape-level parent relationships.
+
+When an operation in window A creates a new window B, FlowTape records B's parent as A when the relationship can be determined from observed handle changes. It must not rely only on browser `window.opener`.
+
+Conceptual stack:
+
+```text
+A -> B -> C
+parent stack: [A, B]
+current: C
+```
+
+If the current popup closes automatically:
+
+1. detect that its handle disappeared
+2. return to its known parent if the parent still exists
+3. re-identify the current page
+4. continue execution
+
+If the current window remains open, no automatic return occurs. If the current window closes and the correct return target is not deterministically known, execution fails rather than choosing an arbitrary remaining window.
+
+### 2.9 Player
 
 Responsibilities:
 
-- load and validate scenario YAML
-- load DOM registry
+- load and validate the scenario package
+- load scenario-local `elements.yaml`
+- load runtime config and credentials
 - evaluate control flow
-- resolve target immediately before each operation
-- perform the Selenium operation
-- apply waits/timeouts
+- identify the current page
+- resolve the target immediately before each operation
+- perform Selenium operations
+- manage windows/tabs
+- apply waits/timeouts and loop safety limits
+- support execution/validation/debug modes
 - expose diagnostic information
-- support execution modes such as execution, validation, and debug
 
-The Player should not reuse a stale WebElement across unrelated steps when a logical target can be resolved again at operation time.
+The Player should not reuse stale `WebElement` objects across unrelated steps when logical targets can be resolved again.
 
-### 2.8 YAML parser and validator
+### 2.10 YAML parser and validator
 
 Responsibilities:
 
 - schema/version validation
 - reserved-word validation
 - action-parameter validation
-- target existence/binding checks
+- target existence/binding checks in the applicable page scope
 - kind/action compatibility checks
+- page-definition validation
 - structural block validation
-- invalid loop/condition detection
+- loop/condition validation
+- credential-reference syntax validation without exposing credential values
 
-It should produce errors that identify the affected scenario step and target.
+Errors should identify the affected scenario step, page scope, and target where applicable.
+
+### 2.11 Runtime configuration and credentials
+
+`config.yaml` contains environment/runtime settings. `credentials.yaml` contains plaintext IDs/passwords used through the dedicated `credential` variable namespace.
+
+The credential provider must prevent secret values from appearing in normal logs, diagnostics, or error messages.
 
 ## 3. File responsibilities
 
+### Scenario package
+
+Recommended initial layout:
+
+```text
+scenarios/
+  scenario-name/
+    scenario.yaml
+    elements.yaml
+```
+
+`scenario.yaml` and `elements.yaml` in the same scenario directory are implicitly associated.
+
 ### Scenario file
 
-Contains procedure semantics.
+Contains procedure semantics such as:
 
-Examples:
-
-- `open`
-- `click`
-- `input`
-- `read`
-- conditions
-- loops
+- navigation
+- click/input/select/read/upload/key/hover actions
+- alert handling
+- checks/waits
+- conditions and loops
 - variables
 - logical target references
+- explicit window/tab context transitions
 
 ### Elements file
 
-Contains DOM resolution knowledge.
+Contains scenario-local page/DOM knowledge:
 
-Examples:
-
-- locator candidates
+- page identification rules
+- page-scoped locator candidates
 - expected element role/type
 - relative scope
-- iframe/shadow context
-- fragile fallback marker
+- ordered iframe/shadow traversal
+- fragile fallback markers
+- fingerprints
+- collection sources
 
 ### Configuration file
 
-Contains runtime/environment-specific values.
+Contains environment-specific values, including:
 
-Examples may include:
-
-- browser choice
-- Edge binary path if needed
-- driver settings/path
+- browser settings
+- required absolute WebDriver path
 - timeout defaults
-- output/log settings
+- credential file path
+- download/log/output locations
+- optional persistent FlowTape Edge profile path
+- Recorder/runtime preferences
+- loop safety defaults
 
-The exact format is intentionally not fixed yet.
+### Credentials file
+
+Contains plaintext username/password entries referenced by scenario credential variables. It is external operational data and must be excluded from source control.
 
 ## 4. Data flow during recording
 
 ```text
 User performs operation
-    -> Injected JS observes event
+    -> Injected JS/browser observation
     -> event normalization/coalescing
-    -> immediate DOM target captured
-    -> target normalization
+    -> detect page/window context changes
+    -> capture immediate DOM target when applicable
+    -> normalize actionable target
     -> ElementSnapshot creation
     -> locator candidate generation
-    -> candidate validation and scoring
-    -> logical target naming
+    -> candidate validation/scoring
+    -> logical target naming in current page scope
     -> DOM Registry update
     -> semantic scenario step appended
 ```
 
-Scenario generation and DOM registration are related but separate outputs.
-
-The event-normalization layer converts low-level event streams into semantic operations. For example, `mousedown`/`mouseup`/`click` should normally become one click step, and typing should normally become one input step when the edit is committed rather than one step per keystroke.
+Raw events are normalized into semantic operations. For example, `mousedown`/`mouseup`/`click` normally become one click step, and ordinary typing becomes one `input` step rather than one step per keystroke.
 
 ## 5. Data flow during manual binding
 
 ```text
-Scenario contains unknown target name
-    -> Bind mode detects missing target
-    -> browser navigates/reaches relevant state
-    -> UI asks user to select the target
-    -> picker identifies element
+Scenario references unknown target
+    -> determine intended page scope
+    -> Bind mode reports missing target
+    -> user reaches the correct browser state
+    -> user selects the target
     -> Element Capture Engine processes it
-    -> registry definition is written
+    -> page-scoped registry definition is written
 ```
 
-Manual scenario authoring must therefore not require manually authoring selector internals.
+Manual scenario authoring must not require hand-authoring selector internals.
 
 ## 6. Data flow during playback
 
 ```text
-Load scenario
-    -> validate schema
-    -> load registry
+Load scenario package
+    -> load config/credentials/registry
+    -> validate schemas
+    -> establish browser/window context
+    -> identify current page
     -> evaluate current control-flow node
-    -> resolve logical target at current DOM state
-    -> validate target kind/state
+    -> resolve current logical target
+    -> validate kind/state
     -> execute or inspect according to mode
+    -> detect resulting page/window changes
     -> playback controller decides continue/pause/step/stop
 ```
 
-Playback pacing/control is separate from execution semantics. The controller must support continuous playback, slow observation delays, single-step execution, execute-until-selected-position, pause/resume/stop, and handoff from playback to recording.
+Playback pacing/control is separate from execution semantics. The controller supports continuous playback, slow observation delays, single-step execution, execute-until-selected-position, pause/resume/stop, and handoff from playback to recording.
 
-A failure should leave the player positioned on the failed step so that the UI can rebind/repair and retry that step without reconstructing the entire application process.
+A failure should leave the player positioned on the failed step so the UI can repair/rebind/retry without reconstructing the entire application process.
 
 ## 7. Target normalization boundary
 
-A raw browser event target is not always the intended operation target.
+A raw browser event target is not always the intended control.
 
-For example:
-
-```html
-<button aria-label="保存">
-  <svg><path /></svg>
-</button>
-```
-
-A click may originate on `path`, but the normalized target should be the actionable `button`.
-
-The normalizer should climb through ancestors to find the appropriate actionable semantic element when needed.
+For example, a click on an SVG `path` inside a button should normally normalize to the actionable button.
 
 Typical actionable elements include:
 
@@ -292,28 +352,28 @@ Typical actionable elements include:
 - textarea
 - select
 - contenteditable elements
-- common ARIA interactive roles
+- common interactive ARIA roles
 
-JavaScript-clickable generic elements may be accepted as fallbacks when no stronger semantic ancestor exists.
+Generic JavaScript-clickable elements may be accepted as fallbacks when no stronger semantic ancestor exists.
 
 ## 8. Shared semantic rules
 
-Recorder and Player must share or mirror the same definitions for:
+Recorder and Player must share or mirror definitions for:
 
 - accessible name
 - explicit/computed role
 - label association
 - text normalization
 - visible/enabled/editable checks
-- frame traversal
-- shadow-root traversal
+- page identification
+- frame/shadow traversal
 - unique-match requirements
 
 A generated locator is invalid as a persisted primary candidate if the Player cannot reproduce its semantics.
 
 ## 9. Suggested implementation layering
 
-A practical package split may eventually resemble:
+A practical package split may resemble:
 
 ```text
 flowtape/
@@ -321,15 +381,17 @@ flowtape/
   recorder/
   editor/
   scenario/
+  pages/
   targets/
   capture/
   resolver/
   player/
   browser/
   config/
+  credentials/
 ```
 
-This is not yet a mandatory filesystem layout. The architectural boundaries above are mandatory; exact module names may evolve.
+This is not a mandatory filesystem layout. Architectural boundaries are mandatory; exact module names may evolve.
 
 ## 10. Dependency direction
 
@@ -342,26 +404,20 @@ UI
  -> Selenium adapter
 ```
 
-Avoid making domain models depend on PySide6 widgets or Selenium WebElement objects directly where plain serializable models are sufficient.
+Domain models should not depend directly on PySide6 widgets or Selenium `WebElement` objects where plain serializable models are sufficient.
 
 ## 11. Versioning
 
 Persisted formats should be versioned from the beginning.
 
-At minimum:
+At minimum, `version: 1` should exist for scenario, DOM-registry, config, and credentials formats where applicable.
 
-```yaml
-version: 1
-```
-
-should exist for scenario and DOM-registry formats or be represented equivalently.
-
-Schema changes must be deliberate and documented rather than inferred at runtime from ambiguous shapes.
+Schema changes must be deliberate and documented.
 
 ## 12. Editor transaction boundary
 
-Scenario editing should operate against an in-memory model with explicit save semantics and undo/redo support.
+Scenario editing operates against an in-memory model with explicit save semantics and undo/redo support.
 
-Persisted step/node identity should be distinct from visible step numbering so reordering does not destroy references used by diagnostics or editor history.
+Persisted step/node identity is distinct from visible step numbering so reordering does not destroy references used by diagnostics/editor history.
 
-External file changes should be detected and reconciled deliberately rather than silently overwriting unsaved editor state.
+External file changes must be detected and reconciled deliberately rather than silently overwriting unsaved state.
