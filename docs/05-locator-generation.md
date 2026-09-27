@@ -19,7 +19,7 @@ Conceptual flow:
 ```text
 raw event target
     -> normalize actionable target
-    -> build ElementSnapshot
+    -> build/receive ElementSnapshot
     -> generate semantic candidates
     -> validate candidates against current DOM
     -> generate contextual candidates if needed
@@ -61,46 +61,33 @@ The normalizer should examine ancestors for actionable semantics such as:
 
 Generic JavaScript-clickable elements may be accepted as fallbacks when no better semantic target exists.
 
-## 4. ElementSnapshot
+Recorder and Player must share or mirror this normalization behavior.
 
-Before generating locators, the browser side should collect a normalized snapshot.
+## 4. ElementSnapshot boundary
 
-Conceptual internal model:
+`ElementSnapshot` is the internal normalized browser-side capture model consumed by locator generation.
 
-```yaml
-tag: button
-id: checkout-submit
-name: null
-type: submit
+The **canonical runtime structure and field meanings are defined in `08-recorder-protocol.md`**. This document does not define a second DTO shape.
 
-role:
-  explicit: button
-  computed: button
+The locator generator may consume both the lightweight Stage 1 snapshot and, where still obtainable, the detailed Stage 2 snapshot described by the Recorder protocol.
 
-accessible_name: 注文を確定
-text: 注文を確定
+Typical semantic evidence available through the canonical snapshot includes:
 
-attributes:
-  data-testid: checkout-submit
-  aria-label: 注文を確定
-  class:
-    - button
-    - primary
-
-state:
-  visible: true
-  enabled: true
-  editable: false
-
-relations:
-  label: null
-  form: 購入フォーム
-  heading: ご注文内容
-  row: null
-  dialog: 注文確認
+```text
+tag/type
+important attributes
+explicit/computed role
+accessible name
+associated label
+visible text
+visible/enabled/editable/checked/selected state
+meaningful heading/form/dialog/row context
+frame/shadow traversal evidence
 ```
 
-This is an internal capture model. It is not persisted wholesale into `elements.yaml`.
+A full DOM snapshot is not required and must not be persisted wholesale into `elements.yaml`.
+
+If an operation immediately navigates away, Stage 1 evidence captured at event time may be the only available source. Locator generation must therefore tolerate missing optional Stage 2 context instead of requiring the old DOM to remain alive.
 
 ## 5. Candidate generation order
 
@@ -163,13 +150,7 @@ role: button
 name: 保存
 ```
 
-Accessible name computation should reflect browser accessibility semantics, including relevant sources such as:
-
-- `aria-labelledby`
-- `aria-label`
-- associated label
-- button text
-- image alt text where applicable
+Accessible-name computation must use the shared DOM semantics defined for Recorder/Player and may draw from `aria-labelledby`, `aria-label`, associated labels, control text, image alt text, and other applicable accessibility sources.
 
 ### 5.4 Associated label
 
@@ -204,7 +185,7 @@ by: name
 value: email
 ```
 
-`name` is common enough to justify a dedicated locator family rather than representing it only as a generic attribute.
+`name` is common enough to justify a dedicated locator family.
 
 ### 5.6 Placeholder
 
@@ -221,7 +202,7 @@ by: placeholder
 value: メールアドレスを入力
 ```
 
-Placeholder is semantically useful but normally less stable than a proper label.
+Placeholder is useful but normally weaker than a proper label.
 
 ### 5.7 Visible text
 
@@ -239,27 +220,13 @@ value: 注文を確定
 exact: true
 ```
 
-Text should be normalized by trimming edge whitespace and collapsing unnecessary internal whitespace/newlines.
+Text is normalized according to shared DOM semantics. Very long or obviously volatile text is normally unsuitable as a primary locator.
 
-Very long text is generally unsuitable as a primary locator.
+### 5.8 Purposeful attributes
 
-### 5.8 Href and other purposeful attributes
+Stable attributes such as a meaningful `href` or `data-action` may become `attribute` candidates when no more specific locator family applies.
 
-Useful stable attributes may be candidates, for example:
-
-```html
-<a href="/account/settings">設定</a>
-```
-
-or:
-
-```html
-<button data-action="submit-order">
-```
-
-These serialize through `attribute` when no more specific family applies.
-
-Avoid attributes that contain tokens, session IDs, unstable query values, framework internals, or purely presentational state.
+Avoid tokens, session IDs, unstable query values, framework internals, and presentation-only state.
 
 ## 6. Candidate validation against current DOM
 
@@ -267,50 +234,26 @@ Every generated locator must be tested against the current DOM using Player-comp
 
 Record at least:
 
-- number of matches
-- whether the captured element is among those matches
-- whether matched elements satisfy the expected basic semantics
+- match count
+- whether the captured target is among the matches
+- whether matched elements satisfy expected basic semantics
 
-A locator that does not reproduce the captured element is not a valid candidate even if it looks meaningful syntactically.
+A locator that cannot reproduce the captured target is invalid even if it looks meaningful syntactically.
 
 ## 7. Contextual candidate generation
 
-When a semantic locator is not unique, combine it with meaningful context rather than immediately falling back to a long CSS path.
+When a semantic locator is not unique, combine it with meaningful context before falling back to long structural selectors.
 
-### 7.1 Stable ancestor
+Supported initial semantic relationships include:
 
-Example:
+- stable ancestor / descendant
+- heading/section context
+- table/list row context
+- dialog context
+- form context
+- nearby-text context
 
-```html
-<section id="profile">
-  <button>保存</button>
-</section>
-```
-
-Conceptual candidate:
-
-```yaml
-by: relative
-anchor:
-  id: profile
-relation: descendant
-target:
-  role: button
-  name: 保存
-```
-
-### 7.2 Heading/section context
-
-Example:
-
-```html
-<section>
-  <h2>プロフィール</h2>
-  <button>保存</button>
-</section>
-```
-
-Conceptual locator:
+Examples:
 
 ```yaml
 by: relative
@@ -323,17 +266,6 @@ target:
   name: 保存
 ```
 
-### 7.3 Table/list row context
-
-Example:
-
-```text
-山田太郎   [編集]
-鈴木一郎   [編集]
-```
-
-Conceptual locator:
-
 ```yaml
 by: relative
 anchor:
@@ -344,51 +276,11 @@ target:
   name: 編集
 ```
 
-### 7.4 Dialog context
-
-Conceptual locator:
-
-```yaml
-by: relative
-anchor:
-  role: dialog
-  name: 注文取消
-relation: descendant
-target:
-  role: button
-  name: 確認
-```
-
-### 7.5 Form context
-
-Conceptual locator:
-
-```yaml
-by: relative
-anchor:
-  role: form
-  name: ログイン
-relation: descendant
-target:
-  role: button
-  name: 送信
-```
-
-### 7.6 Nearby text/sibling context
-
-Use nearby text when markup lacks proper label semantics.
-
-Example:
-
-```text
-契約番号  [input]
-```
-
 A nearby-text relationship is weaker than a true label relationship and should score accordingly.
 
 ## 8. CSS fallback generation
 
-CSS is a supported locator family, but structural CSS is generated after stronger semantic/contextual candidates.
+CSS is supported after stronger semantic/contextual candidates.
 
 Prefer short selectors based on meaningful attributes/classes.
 
@@ -405,7 +297,7 @@ Avoid by default:
 body > div:nth-child(3) > div:nth-child(2) > button
 ```
 
-Limit ancestor depth when building structural CSS. Do not walk from `body` merely to force uniqueness if a more meaningful contextual representation can be built.
+Do not walk from `body` merely to force uniqueness when meaningful context is available.
 
 ## 9. Class filtering
 
@@ -419,12 +311,7 @@ checkout-submit
 primary-action
 ```
 
-Penalize or ignore:
-
-- obvious hash-like classes
-- CSS-in-JS generated names
-- framework-internal classes
-- utility-only classes such as layout/spacing tokens
+Penalize or ignore obvious hash/generated classes, framework-internal classes, and utility/layout classes.
 
 Examples commonly unsuitable as identity evidence:
 
@@ -440,7 +327,7 @@ flex
 
 XPath is a valid fallback, not an error by definition.
 
-A concise semantic XPath can be stable, but when the same concept can be represented through a higher-level locator family, prefer that higher-level representation.
+Prefer higher-level semantic locator families when they express the same concept.
 
 Absolute XPath such as:
 
@@ -452,7 +339,7 @@ is an extreme fallback and should be marked fragile if persisted at all.
 
 ## 11. Scoring model
 
-Candidate ranking uses multiple independent dimensions rather than a single hard-coded selector-type priority.
+Candidate ranking uses multiple independent dimensions.
 
 Recommended total: 100 points.
 
@@ -468,56 +355,13 @@ Penalties are then applied for known fragility signals.
 
 ## 12. Stability (35)
 
-Stability estimates whether the locator evidence is likely to preserve the same meaning across future page loads.
+High-value evidence typically includes explicit stable test attributes, meaningful stable IDs, associated labels, role + accessible name, and stable `name` values.
 
-Typical high-value evidence:
+Lower-value evidence includes presentation classes, DOM depth/path, and positional/index dependence.
 
-- explicit stable test attribute
-- meaningful stable ID
-- associated label
-- role + accessible name
-- stable `name`
+Dynamic/generated-value detection is heuristic and should penalize UUID/hash/random/numeric/framework-generated patterns without claiming that any particular framework is always unstable.
 
-Typical lower-value evidence:
-
-- presentation class
-- DOM depth/path
-- index/position
-
-This is not a permanent per-type constant. The actual value matters.
-
-Example:
-
-```text
-id=user-profile-save     -> likely stable
-id=button-839274         -> suspicious
-id=550e8400-e29b-...     -> highly suspicious
-```
-
-## 13. Dynamic/generated-value detection
-
-Apply penalties for values resembling:
-
-- UUIDs
-- hashes
-- long numeric sequences
-- random alphanumeric IDs
-- framework-generated identifiers
-- CSS-in-JS class names
-
-Examples:
-
-```text
-btn-839274
-ember1837
-react-select-7-input
-radix-generated IDs
-css-1x23kj4
-```
-
-This detection should be heuristic and diagnostic, not a claim that a particular framework can never expose stable IDs.
-
-## 14. Uniqueness (25)
+## 13. Uniqueness (25)
 
 Recommended initial mapping:
 
@@ -528,65 +372,40 @@ Recommended initial mapping:
 | 3-5 | 5 |
 | 6+ | 0 |
 
-A non-unique semantic candidate may still be valuable as the target portion of a relative locator.
+A non-unique semantic candidate may still be valuable as part of a relative locator.
 
-## 15. Semantic meaning (20)
+## 14. Semantic meaning (20)
 
-This dimension asks whether the locator explains the target in human terms.
+High semantic value includes labels, role + accessible name, meaningful test IDs/IDs, and visible control text.
 
-Typical high semantic value:
+Low semantic value includes positional CSS, structural XPath, and arbitrary ancestor depth.
 
-- label
-- role + accessible name
-- meaningful test ID
-- meaningful ID
-- visible button/link text
+When stability is comparable, a semantic representation should rank above a long structural selector.
 
-Typical low semantic value:
-
-- positional CSS
-- structural XPath
-- arbitrary ancestor depth
-
-The intent is that, when stability is comparable, this:
-
-```yaml
-by: role
-role: button
-name: 注文を確定
-```
-
-ranks above a long structural CSS path.
-
-## 16. Target fit (10)
+## 15. Target fit (10)
 
 Target fit measures whether the candidate addresses the actionable element itself rather than an incidental child.
 
-Examples:
+Actionable control itself -> high.
 
-- actionable button/control itself -> high
-- internal `span`/`svg`/`path` -> low unless no actionable semantic parent exists
+Internal `span`/`svg`/`path` -> low unless no actionable semantic parent exists.
 
-Normalization and target-fit scoring work together.
+## 16. Simplicity (10)
 
-## 17. Simplicity (10)
-
-When two locators are comparably stable and meaningful, prefer the simpler representation.
-
-Conceptual preference:
+When correctness/stability are comparable, prefer simpler representations:
 
 ```text
 single semantic condition
-> two-condition combination
+> small semantic combination
 > concise relative locator
 > short CSS
 > long CSS
 > long XPath
 ```
 
-Simplicity must never override correctness or uniqueness.
+Simplicity never overrides correctness or uniqueness.
 
-## 18. Fragility penalties
+## 17. Fragility penalties
 
 Recommended initial penalty signals include:
 
@@ -604,21 +423,21 @@ Recommended initial penalty signals include:
 | highly locale-sensitive/volatile text | -5 to -15 |
 | current value/state used as identity | -20 |
 
-Exact numeric tuning may change after real-world tests, but the dimensions and intent should remain stable.
+Exact numeric tuning may change after real-world tests, but the dimensions and intent remain stable.
 
-## 19. Hard validation before scoring
+## 18. Hard validation before scoring
 
 Scoring is not a substitute for basic validity.
 
-Before ranking, reject or downgrade candidates that violate hard rules, for example:
+Reject or downgrade candidates that violate hard rules, including:
 
-- no match at all
-- captured target is not among matches
-- candidate contradicts the target's required semantics
-- only hidden/non-operable matches exist for an operation that requires visibility
-- candidate addresses an incidental child that should have been normalized to an actionable ancestor
+- no match
+- captured target not among matches
+- contradiction with target semantics
+- only hidden/non-operable matches for an action that requires operability
+- incidental child selected where actionable normalization should have chosen a parent
 
-The pipeline is:
+Pipeline:
 
 ```text
 hard validation
@@ -626,27 +445,22 @@ hard validation
     -> ranking
 ```
 
-## 20. Candidate-generation phases and early stopping
+## 19. Candidate-generation phases and early stopping
 
-Do not generate every possible combination.
+Avoid candidate explosion.
 
-Recommended phased strategy:
+Recommended phases:
 
 ```text
 Phase 1: semantic/local candidates
-    -> if enough Strong/Good independent candidates exist, stop
-
 Phase 2: relative/context candidates
-    -> if enough Strong/Good independent candidates exist, stop
-
 Phase 3: CSS fallback
-
 Phase 4: XPath/positional emergency fallback
 ```
 
-This prevents candidate explosion and keeps diagnostics understandable.
+If enough independent Strong/Good candidates exist, stop before lower-quality phases.
 
-## 21. Quality bands
+## 20. Quality bands
 
 Recommended initial score interpretation:
 
@@ -657,22 +471,18 @@ Recommended initial score interpretation:
 | 50-69 | Weak |
 | 0-49 | Fragile |
 
-Persist Strong/Good candidates preferentially.
+Persist Strong/Good candidates preferentially. Weak candidates are fallbacks. Fragile candidates are retained only when necessary and must be marked.
 
-Weak candidates are fallbacks.
-
-Fragile candidates should only be persisted when no stronger representation exists and must be marked accordingly.
-
-## 22. Persisted candidate count
+## 21. Persisted candidate count
 
 Normal target definitions should store approximately:
 
 - 1 primary locator
 - 1-2 independent fallback locators
 
-A large list of mechanically generated alternatives reduces maintainability without necessarily improving robustness.
+Large mechanically generated candidate lists reduce maintainability without guaranteeing robustness.
 
-## 23. Deduplication by evidence source
+## 22. Deduplication by evidence source
 
 These are not independent fallbacks:
 
@@ -684,13 +494,13 @@ XPath //*[@id='profile-save']
 
 They all depend on the same ID.
 
-The generator should track the underlying evidence source and retain only the best representation from a redundant group.
+Retain only the best representation from redundant evidence groups.
 
-## 24. Fallback diversity
+## 23. Fallback diversity
 
-Prefer fallback candidates based on different evidence.
+Prefer fallbacks based on genuinely different evidence.
 
-Example desirable set:
+Desirable example:
 
 ```text
 Primary: role + accessible name
@@ -698,28 +508,15 @@ Fallback 1: stable test ID
 Fallback 2: section/heading-relative locator
 ```
 
-This improves resilience to one type of page change.
+## 24. Score persistence
 
-## 25. Score persistence
+Raw candidate scores are diagnostics/internal metadata and should not normally clutter `elements.yaml`.
 
-Raw candidate scores are primarily diagnostics/internal metadata.
+The persisted registry contains selected locator definitions; scoring/rejected-candidate detail belongs in diagnostics.
 
-They should not normally clutter `elements.yaml`.
+## 25. `expect` generation
 
-A debug log may show:
-
-```text
-92  role(button, "ログイン")
-88  id(login-submit)
-61  css(form.login button)
-24  absolute xpath
-```
-
-but the persisted registry should normally contain only the selected definitions.
-
-## 26. `expect` generation
-
-After selecting locators, generate a minimal useful expectation set.
+Generate a minimal useful expectation set.
 
 Button example:
 
@@ -740,7 +537,7 @@ expect:
 
 Do not over-constrain incidental presentation details.
 
-## 27. Fingerprint generation
+## 26. Fingerprint generation
 
 Preserve a small diagnostic fingerprint when useful source information exists, for example:
 
@@ -753,21 +550,20 @@ fingerprint:
     type: submit
 ```
 
-Fingerprint is supporting evidence for diagnostics/repair, not a license for fuzzy implicit clicking. It must not be used to bypass the resolver's normal uniqueness and expectation rules.
+Fingerprint supports diagnostics/repair only. It is not a hidden fuzzy locator and must never bypass normal resolver uniqueness/expectation rules.
+
+## 27. Recorder/Player compatibility requirement
+
+Candidate validation must use matching semantics that the Player can reproduce.
+
+The generator must not emit a persisted primary candidate whose accessible-name, role, visibility, label, context traversal, or locator behavior depends on Recorder-only logic.
+
+Shared DOM semantics and the canonical ElementSnapshot boundary are specified in `08-recorder-protocol.md`; persisted locator/expect shapes are specified in `07-data-schema.md`; runtime fallback and uniqueness behavior are specified in `09-runtime-semantics.md`.
 
 ## 28. Future observed-stability improvement
 
 A later version may compare repeated observations of the same logical target.
 
-Example:
-
-```text
-previous id: btn-82931
-current id:  btn-93822
-```
-
-This is evidence that the ID is dynamic and should be downgraded.
-
-Conversely, repeatedly stable semantic attributes may gain confidence.
+Changing values across observations can provide evidence that an ID/attribute is dynamic; repeatedly stable semantic evidence may gain confidence.
 
 This is a future enhancement and not required for the first implementation.
