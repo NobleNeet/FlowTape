@@ -359,9 +359,188 @@ If no containing form exists, that relative candidate produces zero acceptable m
 
 For all supported relative relations, if the anchor SemanticSelector itself resolves to multiple acceptable anchor elements and the relation cannot yield exactly one deterministic scope, the relative candidate is ambiguous. It must not silently use the first anchor.
 
-## 9. Implementation readiness effect
+## 9. Unknown-page PageDefinition authoring
 
-The decisions in this document are intended to remove implementation-time product decisions from the following areas:
+When Recorder observes a semantic operation on a browser state that cannot be associated uniquely with an existing PageDefinition, the operation must not be discarded and the Recorder must not invent an unreviewed page identity silently.
+
+The v1 authoring flow is:
+
+1. hold the SemanticOperation in a pending-page-association state.
+2. generate a proposed PageDefinition from current browser evidence.
+3. present the proposed page ID and `identify` conditions to the user.
+4. allow the user to edit the proposed page ID and identification conditions.
+5. persist the new PageDefinition only after explicit confirmation.
+6. associate the pending SemanticOperation with the confirmed page and continue ordinary target creation/recording.
+
+### 9.1 Page ID proposal
+
+The Recorder should propose a readable page ID using stable human-readable evidence where available, in this preference family:
+
+```text
+meaningful document/page title
+meaningful distinctive heading
+stable URL path segment
+fallback generated page_<n>
+```
+
+The proposal is only a convenience. The user may edit it before persistence.
+
+The final page ID must satisfy the ordinary PageId schema and be unique within the scenario-local registry.
+
+### 9.2 Identification-condition proposal
+
+The Recorder may propose URL and semantic DOM evidence from the current page.
+
+Guidelines:
+
+- prefer stable URL `contains` or `starts_with` evidence over volatile exact URLs containing IDs, tokens, query parameters, or fragments.
+- use `url.equals` only when the full URL is reasonably stable and exact identity is desirable.
+- prefer distinctive semantic DOM evidence such as heading/control role + accessible name when URL evidence alone is insufficient.
+- multiple pieces of evidence may be combined with `all` where that reduces ambiguity without making the page definition fragile.
+- never persist a candidate identification rule that already matches multiple registered/current logical pages without explicit user correction.
+
+The user sees the proposed identification conditions before confirmation.
+
+### 9.3 Cancellation
+
+If the user cancels new-page registration, FlowTape must not fabricate a PageDefinition or persist the pending operation under an arbitrary existing page.
+
+Recording stops or remains explicitly blocked at that pending operation with an unresolved-page-authoring state. Previously completed recorded steps remain valid.
+
+Cancellation is an authoring stop, not a Recorder transport desynchronization error.
+
+## 10. `alert_input` semantics
+
+`alert_input` sets the text value of the current JavaScript `prompt` dialog only.
+
+It does **not** accept, dismiss, or otherwise close the dialog.
+
+To enter text and then confirm the prompt, the scenario uses two explicit actions:
+
+```yaml
+- action: alert_input
+  value: ABC123
+
+- action: alert_accept
+```
+
+To enter text and then cancel the prompt, use:
+
+```yaml
+- action: alert_input
+  value: ABC123
+
+- action: alert_dismiss
+```
+
+`alert_input` against a current dialog that does not accept prompt text fails with an action/dialog compatibility diagnostic.
+
+This separation keeps `alert_input`, `alert_accept`, and `alert_dismiss` independently readable and deterministic.
+
+## 11. Variable interpolation and scalar-type preservation
+
+FlowTape distinguishes a pure variable reference from a string template containing a variable reference.
+
+### 11.1 Pure reference
+
+When the entire persisted scalar string consists of exactly one ordinary or credential reference, for example:
+
+```yaml
+value: ${count}
+```
+
+runtime expansion yields the referenced scalar value with its underlying scalar type preserved where the consuming field permits that type.
+
+Examples:
+
+```yaml
+variables:
+  count: 3
+  active: true
+```
+
+A structured JSONL append such as:
+
+```yaml
+- action: append
+  output: result
+  values:
+    count: ${count}
+    active: ${active}
+```
+
+produces JSON scalar types equivalent to:
+
+```json
+{"count": 3, "active": true}
+```
+
+rather than forcing both values to strings.
+
+### 11.2 Template interpolation
+
+If a scalar contains literal text in addition to references, expansion always produces a string.
+
+Example:
+
+```yaml
+value: "count=${count}"
+```
+
+expands to:
+
+```text
+count=3
+```
+
+### 11.3 String-consuming browser fields
+
+Fields whose browser/filesystem semantics require text convert the expanded scalar to its textual representation after interpolation/type resolution.
+
+This includes at least:
+
+```text
+open.url
+input.value
+select.value
+upload.path
+alert_input.value
+key/key-combination textual tokens where applicable
+```
+
+Boolean textual conversion uses lowercase YAML/JSON-style text:
+
+```text
+true
+false
+```
+
+`null` is not valid for a required string-consuming field unless that field explicitly documents null semantics; otherwise runtime validation fails before browser mutation.
+
+### 11.4 Output serialization
+
+Output formats behave as follows:
+
+- JSONL preserves expanded scalar types for pure references.
+- CSV serializes expanded scalar values to text; `null` becomes an empty cell as already defined by runtime semantics.
+- text output serializes the expanded result as text.
+- template interpolation always yields text before output serialization.
+
+### 11.5 Values produced by `read`
+
+DOM `read` operations normally produce strings.
+
+A missing requested DOM attribute produces `null` as already defined by runtime semantics.
+
+FlowTape does not automatically parse DOM text such as `"10"`, `"true"`, or `"3.14"` into numeric/boolean types in v1.
+
+Any future explicit type-conversion feature requires a separate schema decision; v1 performs no implicit parsing.
+
+## 12. Final implementation-readiness decision
+
+The pre-implementation specification audit is complete.
+
+The decisions in this document remove identified implementation-time product decisions from:
 
 - destructive-risk execution confirmation
 - supported v1 window switching
@@ -370,5 +549,10 @@ The decisions in this document are intended to remove implementation-time produc
 - strict frame/shadow context persistence
 - collection expectation behavior
 - relative locator support boundary
+- unknown-page PageDefinition authoring
+- JavaScript prompt input behavior
+- interpolation/type-preservation behavior
 
-Implementation code and tests should use these rules rather than inventing alternate behavior locally.
+No known product-level decision remains that should require implementation to stop and request user clarification before ordinary v1 development can proceed.
+
+If implementation later exposes a genuinely new contradiction or an unrepresentable real-world workflow, update the specification deliberately rather than inventing undocumented behavior locally.
