@@ -11,13 +11,27 @@ The conceptual UI has two physical windows:
 1. FlowTape application window
 2. Selenium-controlled browser window
 
-Inside the FlowTape application, the workflow is organized logically around three areas:
+Inside the FlowTape application, the primary editing layout should use two panes:
 
-- recording / step list
-- structural editing
-- target/element information
+- scenario/structure view
+- selected-item properties / target details
 
-Exact widget placement may evolve, but these responsibilities should remain separated.
+Conceptually:
+
+```text
+Selenium browser                  FlowTape application
++--------------------------+      +----------------------+------------------+
+|                          |      | Scenario / Structure | Properties       |
+| Real target Web page     |      |                      |                  |
+|                          |      | vertical step list   | selected action  |
+| hover/pick/highlight     |      | nested range blocks  | target/condition |
+|                          |      |                      | diagnostics      |
++--------------------------+      +----------------------+------------------+
+```
+
+The browser is the place where the user indicates real DOM elements. The scenario/structure view shows execution flow, and the properties pane edits the meaning/details of the currently selected step or structural block.
+
+The exact widget implementation may evolve, but these responsibilities and the two-window model should remain separated.
 
 ## 2. Recording model
 
@@ -35,6 +49,13 @@ Start recording
 ```
 
 The Recorder should not force the user to define branching logic while demonstrating the normal path.
+
+The intended responsibility split is:
+
+- Recorder: capture linear browser operations and acquire/reacquire DOM targets
+- Scenario Editor: add or modify control-flow semantics such as conditions, loops, grouping, and alternate branches after recording
+
+Both may live in the same FlowTape application window, but their responsibilities should remain conceptually distinct.
 
 ## 3. Browser-side observation
 
@@ -183,6 +204,21 @@ Activate picker
 
 The browser-side highlight must not itself be recorded as an application operation.
 
+The same picker mechanism should also be callable from structural editing when a condition or loop depends on a DOM element.
+
+Example:
+
+```text
+Select a while block
+    -> choose condition "element exists"
+    -> click "select from browser"
+    -> browser enters element-pick mode
+    -> user clicks "次へ"
+    -> FlowTape binds the condition to logical target "次へ"
+```
+
+DOM-dependent control-flow configuration should therefore reuse the same Element Capture Engine as Recorder/Picker/Bind rather than introducing a separate selector-entry workflow.
+
 ## 10. Bind missing targets
 
 Hand-written scenarios may contain unresolved names.
@@ -258,10 +294,22 @@ Clicking the `path` should normally appear as a click on `保存`, not as a clic
 
 Recording and structural editing should be conceptually separate operations:
 
-- Recorder: captures what happened
-- Scenario Editor: describes when/how often it happens
+- Recorder: captures what happened and which real DOM targets were involved
+- Scenario Editor: describes when/how often recorded or manually added operations happen
 
-This separation is intentional and should remain even if both features share one application window.
+This separation is intentional and should remain even though both features share one FlowTape application window.
+
+A typical edit cycle is therefore:
+
+```text
+record a normal linear path
+    -> stop recording
+    -> select a step/range
+    -> wrap or edit structure
+    -> if the structure needs a DOM-dependent condition, invoke browser picker
+    -> validate
+    -> play back
+```
 
 ## 15. Manual YAML editing
 
@@ -284,8 +332,10 @@ The first usable Recorder should prioritize:
 - reliable capture of common click/input/select operations
 - target creation
 - vertical step list
+- two-pane FlowTape editor layout (scenario/structure + properties)
 - target rename/rebind
 - missing-target binding
 - simple range wrapping for conditions/loops
+- invoking Element Picker from DOM-dependent condition/loop properties
 
 Advanced visual editing can follow after these core semantics are stable.
