@@ -169,6 +169,8 @@ The initial language should be capable of representing at least the following op
 
 Potential navigation operations include page open, back, forward, and refresh. Exact names beyond `open` should remain conventional English terms when introduced.
 
+A navigation that merely results from clicking a normal link/button is not normally persisted as an additional redundant `open` step. Explicit navigation operations and browser-context changes remain distinct operations.
+
 ### Click
 
 ```yaml
@@ -220,6 +222,12 @@ The exact supported read sources (text/value/attribute/etc.) will be specified b
 The DSL must support waiting/checking for browser state without requiring arbitrary Python expressions.
 
 The exact action names and option schema for generic waits remain to be finalized.
+
+### Window/tab context
+
+The DSL must leave room for explicit browser-context transitions such as switching to a newly opened tab/window and returning to a previous one.
+
+Exact reserved action names remain to be finalized, but these are semantic browser-context operations and should be represented explicitly when needed for deterministic playback.
 
 ## 9. Variables
 
@@ -297,7 +305,7 @@ Conceptual example:
         target: 編集
 ```
 
-The final collection/source schema is not yet fixed.
+The final collection/source schema is not yet fixed. A `for_each` source denotes a collection and therefore is not subject to the ordinary single-target requirement that exactly one element resolve.
 
 ### While
 
@@ -349,7 +357,7 @@ Rules:
 - one acceptable match -> proceed
 - more than one acceptable match -> ambiguity error
 
-This applies to actions and condition checks.
+This applies to actions and condition checks. Collection sources used by `for_each` follow their own collection-validation semantics.
 
 ## 15. Recorder metadata
 
@@ -358,6 +366,8 @@ Recorder-generated diagnostic metadata may be associated with recorded steps int
 Such metadata must not become required hand-written scenario content and must not alter the visible semantic meaning of the procedure.
 
 The final persisted `_meta` schema is not yet fixed.
+
+Stable node identifiers may be persisted in metadata or another reserved field where needed by the editor. Visible step numbers are not persisted identity.
 
 ## 16. Explicit exclusions
 
@@ -415,3 +425,17 @@ steps:
 ```
 
 This example is deliberately semantic: DOM mechanics remain in the target registry.
+
+## 18. Playback control is not scenario mode
+
+Playback pacing is intentionally not represented by `mode`.
+
+`実行` / `確認` / `デバッグ` describe what the engine does with a step. UI/runtime choices such as normal playback, slow playback, single-step playback, pause, execute-until-position, or play-to-end-and-record describe how execution is scheduled interactively.
+
+Those controls should normally remain runtime/editor state rather than procedure semantics in scenario YAML.
+
+## 19. Optional human-readable descriptions
+
+Steps and structural blocks may carry an optional description/note intended for procedure-document readability.
+
+The exact key name is not yet frozen, but the field must remain semantically inert unless a future specification explicitly assigns execution meaning to it.
