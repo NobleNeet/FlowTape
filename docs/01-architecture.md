@@ -222,6 +222,7 @@ The exact format is intentionally not fixed yet.
 ```text
 User performs operation
     -> Injected JS observes event
+    -> event normalization/coalescing
     -> immediate DOM target captured
     -> target normalization
     -> ElementSnapshot creation
@@ -233,6 +234,8 @@ User performs operation
 ```
 
 Scenario generation and DOM registration are related but separate outputs.
+
+The event-normalization layer converts low-level event streams into semantic operations. For example, `mousedown`/`mouseup`/`click` should normally become one click step, and typing should normally become one input step when the edit is committed rather than one step per keystroke.
 
 ## 5. Data flow during manual binding
 
@@ -258,8 +261,12 @@ Load scenario
     -> resolve logical target at current DOM state
     -> validate target kind/state
     -> execute or inspect according to mode
-    -> continue
+    -> playback controller decides continue/pause/step/stop
 ```
+
+Playback pacing/control is separate from execution semantics. The controller must support continuous playback, slow observation delays, single-step execution, execute-until-selected-position, pause/resume/stop, and handoff from playback to recording.
+
+A failure should leave the player positioned on the failed step so that the UI can rebind/repair and retry that step without reconstructing the entire application process.
 
 ## 7. Target normalization boundary
 
@@ -350,3 +357,11 @@ version: 1
 should exist for scenario and DOM-registry formats or be represented equivalently.
 
 Schema changes must be deliberate and documented rather than inferred at runtime from ambiguous shapes.
+
+## 12. Editor transaction boundary
+
+Scenario editing should operate against an in-memory model with explicit save semantics and undo/redo support.
+
+Persisted step/node identity should be distinct from visible step numbering so reordering does not destroy references used by diagnostics or editor history.
+
+External file changes should be detected and reconciled deliberately rather than silently overwriting unsaved editor state.
