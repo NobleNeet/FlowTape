@@ -4,7 +4,7 @@ Status: initial specification before implementation
 
 ## 1. High-level structure
 
-FlowTape is divided into UI, scenario/domain, page/DOM-resolution, browser-context, and browser-execution layers.
+FlowTape is divided into UI, scenario/domain, page/DOM-resolution, browser-context, browser-execution, and result-output layers.
 
 ```text
 +--------------------+
@@ -33,17 +33,17 @@ FlowTape is divided into UI, scenario/domain, page/DOM-resolution, browser-conte
               | PageIdentifier     |
               | TargetResolver     |
               | WindowContext      |
-              +---------+----------+
-                        |
-                        v
-                  +-----------+
-                  | Selenium  |
-                  +-----+-----+
-                        |
-                        v
-                  +-----------+
-                  | Edge      |
-                  +-----------+
+              +----+----------+----+
+                   |          |
+                   v          v
+             +-----------+  +----------------+
+             | Selenium  |  | Result Output  |
+             +-----+-----+  | Writer         |
+                   |        +----------------+
+                   v
+             +-----------+
+             | Edge      |
+             +-----------+
 ```
 
 The Recorder additionally uses browser-injected JavaScript to observe user operations and inspect DOM details.
@@ -74,8 +74,12 @@ Responsibilities:
 - select contiguous step ranges
 - wrap ranges in structural blocks
 - configure `if`, `else`, `repeat`, `for_each`, and `while`
+- add explicit `read` and `append` actions when the user wants result collection
+- edit named output definitions
 - maintain a readable relationship between UI structure and YAML structure
 - maintain explicit save state and undo/redo
+
+The Editor must not infer that visible page text should be collected merely because the user viewed or clicked it.
 
 ### 2.3 Injected browser script
 
@@ -90,6 +94,8 @@ Responsibilities include:
 - communicate captured DOM information back to Python
 
 It does not become a second execution engine. Playback remains controlled by Python/Selenium.
+
+Detailed transport, normalization, reinjection, IME, navigation-snapshot, and picker rules are defined in `08-recorder-protocol.md`.
 
 ### 2.4 Element Capture Engine
 
@@ -111,6 +117,8 @@ Output:
 - ordered iframe/shadow traversal context
 
 Candidate generation and scoring remain separate stages.
+
+The canonical runtime ElementSnapshot structure is defined by `08-recorder-protocol.md`; locator-generation code consumes that model rather than inventing a second incompatible snapshot DTO.
 
 ### 2.5 Page Identifier
 
@@ -154,13 +162,15 @@ Resolution order is conceptually:
 identify current page
     -> load page-scoped target definition
     -> enter ordered frame/shadow context
+    -> apply runtime `within` scope where present
     -> try locator candidate
     -> inspect matches
     -> validate against expect
+    -> apply action-specific requirements
     -> accept exactly one element
 ```
 
-If a locator yields no acceptable element, later persisted locators may be tried. If multiple acceptable elements remain, the resolver must not choose the first implicitly.
+If a locator yields no acceptable element, later persisted locators may be tried. If multiple acceptable elements remain, the resolver must not choose the first implicitly. Exact retry/fallback semantics are defined in `09-runtime-semantics.md`.
 
 Positional/index-based definitions are allowed only as explicit fragile fallbacks.
 
@@ -201,31 +211,54 @@ Responsibilities:
 - manage windows/tabs
 - apply waits/timeouts and loop safety limits
 - support execution/validation/debug modes
+- manage runtime variables and collection-member snapshots
+- invoke the Result Output Writer for `append`
 - expose diagnostic information
 
 The Player should not reuse stale `WebElement` objects across unrelated steps when logical targets can be resolved again.
 
-### 2.10 YAML parser and validator
+Exact Player behavior is defined in `09-runtime-semantics.md`.
+
+### 2.10 Result Output Writer
+
+The Result Output Writer handles user-requested scenario result artifacts and is separate from diagnostic logging.
+
+Responsibilities:
+
+- resolve scenario-declared logical outputs against configured `paths.outputs`
+- enforce relative-path/root-containment rules
+- initialize `new`, `append`, and `overwrite` lifecycle behavior
+- write CSV, JSON Lines, and text outputs
+- preserve CSV column order and validate existing headers where required
+- flush successful `append` results so partial runs retain completed records
+- reject credential/secret-derived values
+- surface output-specific failures without conflating them with browser logging
+
+The writer does not decide what page data to collect; `read` and `append` remain explicit scenario actions.
+
+### 2.11 YAML parser and validator
 
 Responsibilities:
 
 - schema/version validation
 - reserved-word validation
 - action-parameter validation
+- output-definition and append-schema validation
 - target existence/binding checks in the applicable page scope
 - kind/action compatibility checks
 - page-definition validation
 - structural block validation
 - loop/condition validation
 - credential-reference syntax validation without exposing credential values
+- variable-name and namespace validation
 
-Errors should identify the affected scenario step, page scope, and target where applicable.
+Errors should identify the affected scenario step, page scope, target/output name, and reason where applicable.
 
-### 2.11 Runtime configuration and credentials
+### 2.12 Runtime configuration and credentials
 
 `config.yaml` contains environment/runtime settings. `credentials.yaml` contains plaintext IDs/passwords used through the dedicated `credential` variable namespace.
 
-The credential provider must prevent secret values from appearing in normal logs, diagnostics, or error messages.
+The credential provider must prevent secret values and secret-derived runtime values from appearing in normal logs, diagnostics, error messages, or result outputs.
 
 ## 3. File responsibilities
 
@@ -247,11 +280,12 @@ scenarios/
 Contains procedure semantics such as:
 
 - navigation
-- click/input/select/read/upload/key/hover actions
+- click/input/select/read/append/upload/key/hover actions
 - alert handling
 - checks/waits
 - conditions and loops
 - variables
+- named output definitions
 - logical target references
 - explicit window/tab context transitions
 
@@ -279,17 +313,26 @@ Contains environment-specific values, including:
 - download/log/output locations
 - optional persistent FlowTape Edge profile path
 - Recorder/runtime preferences
+- playback observation-delay preferences
 - loop safety defaults
 
 ### Credentials file
 
 Contains plaintext username/password entries referenced by scenario credential variables. It is external operational data and must be excluded from source control.
 
+### Generated outputs
+
+Generated outputs are execution artifacts rooted under configured `paths.outputs` and are not scenario source files.
+
+They contain only data explicitly emitted by scenario `append` actions. They are distinct from FlowTape system logs and browser downloads.
+
 ## 4. Data flow during recording
 
 ```text
 User performs operation
     -> Injected JS/browser observation
+    -> RawCaptureEvent queue
+    -> Python polling
     -> event normalization/coalescing
     -> detect page/window context changes
     -> capture immediate DOM target when applicable
@@ -302,7 +345,9 @@ User performs operation
     -> semantic scenario step appended
 ```
 
-Raw events are normalized into semantic operations. For example, `mousedown`/`mouseup`/`click` normally become one click step, and ordinary typing becomes one `input` step rather than one step per keystroke.
+Raw events are normalized into semantic operations. For example, `mousedown`/`mouseup`/`click` normally become one click step, ordinary typing becomes one `input` step rather than one step per keystroke, and IME composition is handled before input commit.
+
+`read`/`append` result collection is not inferred from ordinary page observation. The user adds those operations explicitly through the Editor/Picker workflow.
 
 ## 5. Data flow during manual binding
 
@@ -324,12 +369,14 @@ Manual scenario authoring must not require hand-authoring selector internals.
 Load scenario package
     -> load config/credentials/registry
     -> validate schemas
+    -> initialize runtime variables/output lifecycle
     -> establish browser/window context
     -> identify current page
     -> evaluate current control-flow node
     -> resolve current logical target
-    -> validate kind/state
+    -> validate expectations/action requirements
     -> execute or inspect according to mode
+    -> write explicit result output when action=append and mode=実行
     -> detect resulting page/window changes
     -> playback controller decides continue/pause/step/stop
 ```
@@ -371,6 +418,8 @@ Recorder and Player must share or mirror definitions for:
 
 A generated locator is invalid as a persisted primary candidate if the Player cannot reproduce its semantics.
 
+The canonical browser-side/runtime snapshot and semantic-helper boundary is defined in `08-recorder-protocol.md`.
+
 ## 9. Suggested implementation layering
 
 A practical package split may resemble:
@@ -386,6 +435,7 @@ flowtape/
   capture/
   resolver/
   player/
+  outputs/
   browser/
   config/
   credentials/
@@ -400,17 +450,19 @@ Preferred dependency direction:
 ```text
 UI
  -> application services
- -> domain models / capture / resolution
- -> Selenium adapter
+ -> domain models / capture / resolution / outputs
+ -> Selenium/filesystem adapters
 ```
 
-Domain models should not depend directly on PySide6 widgets or Selenium `WebElement` objects where plain serializable models are sufficient.
+Domain models should not depend directly on PySide6 widgets, Selenium `WebElement` objects, or open file handles where plain serializable models are sufficient.
 
 ## 11. Versioning
 
 Persisted formats should be versioned from the beginning.
 
 At minimum, `version: 1` should exist for scenario, DOM-registry, config, and credentials formats where applicable.
+
+Recorder protocol versioning is independent from persisted YAML schema versioning.
 
 Schema changes must be deliberate and documented.
 
