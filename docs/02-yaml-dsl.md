@@ -4,16 +4,16 @@ Status: initial specification before implementation
 
 ## 1. Design goals
 
-The FlowTape scenario language must satisfy two roles at the same time:
+The FlowTape scenario language serves two roles at once:
 
-1. an executable browser-automation definition
+1. executable browser automation
 2. a human-readable operation manual
 
-The language therefore favors semantic operation descriptions over Selenium-specific implementation details.
+The language therefore favors semantic browser operations over Selenium-specific implementation details.
 
 ## 2. Vocabulary policy
 
-Reserved keys and common browser-action names use English when the term is conventional and concise.
+Reserved keys and conventional browser-action names use English when the term is concise and widely understood.
 
 Examples:
 
@@ -21,6 +21,9 @@ Examples:
 - `double_click`
 - `input`
 - `select`
+- `read`
+- `wait`
+- `check`
 - `if`
 - `while`
 - `repeat`
@@ -28,25 +31,15 @@ Examples:
 
 User-facing values and free-form text may use Japanese.
 
-Established values:
+Established execution-mode values:
 
 ```yaml
 mode: 実行
-```
-
-or:
-
-```yaml
 mode: 確認
-```
-
-or:
-
-```yaml
 mode: デバッグ
 ```
 
-Risk classification uses:
+Risk values:
 
 ```yaml
 risk: 安全
@@ -63,139 +56,142 @@ version: 1
 name: ログイン確認
 mode: 実行
 
+variables:
+  search_word: RTX 5090
+
 steps:
   - action: open
     url: https://example.com/login
 
   - action: input
-    target: メールアドレス
-    value: test@example.com
+    target: ユーザーID
+    value: ${credential.社内システム.username}
+
+  - action: input
+    target: パスワード
+    value: ${credential.社内システム.password}
 
   - action: click
     target: ログイン
 ```
 
-Exact optional top-level metadata may expand later, but existing keys must not be silently repurposed.
+The scenario-local `elements.yaml` is implicitly associated through the containing scenario directory and normally does not need to be referenced explicitly.
 
 ## 4. Execution modes
 
 ### 4.1 `実行`
 
-Normal playback.
-
-FlowTape resolves the target, validates it, and performs the requested browser operation.
+Normal playback. FlowTape resolves, validates, and performs the requested operation.
 
 ### 4.2 `確認`
 
-Validation without performing the actual mutating browser operation.
-
-The engine should check, as applicable:
+Validation without performing the actual mutating browser operation. The engine checks as applicable:
 
 - target definition exists
 - target resolves
-- one acceptable element remains
-- element is visible
-- element is enabled/operable
-- expected UI kind/type matches the requested action
-
-The purpose is to answer "could this step be executed against the current page?" without carrying out the operation itself.
+- exactly one acceptable element remains for single-target operations
+- the element is visible/enabled/editable where required
+- expected kind/type is compatible with the action
+- current page/window context is valid
 
 ### 4.3 `デバッグ`
 
-Provides the validation behavior plus additional diagnostics, such as:
+Provides confirmation behavior plus diagnostics such as locator candidates, match counts, rejection reasons, highlighted candidates, current page scope, and frame/shadow context.
 
-- candidate locator information
-- match counts
-- reason a locator was accepted or rejected
-- highlighted candidate element(s)
-- contextual information useful for repairing the target definition
+Debug mode must not change matching semantics.
 
-Debug mode must not redefine the meaning of target matching.
+## 5. `enabled`
 
-## 5. `enabled` and `mode`
-
-Whether a step is enabled and how it executes are separate concepts.
-
-A disabled step is skipped intentionally. A step in `確認` mode is not equivalent to a disabled step because validation still occurs.
-
-The final exact syntax for per-step `enabled` is not yet frozen, but implementations must preserve this conceptual separation.
-
-## 6. Risk classification
-
-Operations may be classified by risk independently from execution mode.
-
-Values:
-
-- `安全` — non-mutating or low-risk operations
-- `更新` — changes server/application state
-- `破壊的` — deletion, irreversible submission, or equivalent high-impact change
-
-Risk is metadata/control information, not a replacement for the action itself.
-
-A future UI may use it for warnings or execution gating.
-
-## 7. Target references
-
-A scenario target is a logical name:
+Step enablement is independent of execution mode.
 
 ```yaml
 - action: click
   target: ログイン
+  enabled: false
 ```
 
-or, when namespacing is useful:
+`enabled` is boolean and defaults to `true`.
+
+A disabled step is skipped intentionally. A step in `確認` mode is not equivalent to a disabled step because validation still occurs.
+
+## 6. Risk classification
+
+Operations may carry independent risk metadata:
+
+- `安全` — non-mutating or low-risk
+- `更新` — changes application/server state
+- `破壊的` — deletion, irreversible submission, or equivalent high-impact change
+
+In v1, risk is metadata for UI warning/diagnostics/logging and does not itself block execution. Future config policy may add execution gating.
+
+## 7. Target references and page scope
+
+A scenario target is a human-readable logical name:
 
 ```yaml
 - action: click
-  target: プロフィール/保存
+  target: 保存
+```
+
+The target is resolved inside the currently identified page scope in the scenario-local `elements.yaml`.
+
+The same logical name may therefore exist on multiple pages without conflict.
+
+Within one page, contextual namespacing remains available where needed:
+
+```yaml
+- action: click
+  target: 配送先/編集
 ```
 
 Raw CSS/XPath is not the normal scenario representation.
 
-The logical name is resolved through the DOM registry (`elements.yaml`).
-
-Unbound target names are allowed while authoring. They must be bound before successful normal execution.
+Unbound target names are allowed while authoring but prevent successful normal execution until bound.
 
 ## 8. Core browser actions
 
-The initial language should be capable of representing at least the following operation families.
-
-### Navigation
+### 8.1 Navigation
 
 ```yaml
 - action: open
   url: https://example.com
+
+- action: back
+
+- action: forward
+
+- action: refresh
 ```
 
-Potential navigation operations include page open, back, forward, and refresh. Exact names beyond `open` should remain conventional English terms when introduced.
+A normal click that causes navigation remains primarily the click step; FlowTape should not redundantly record an additional `open` for the resulting navigation.
 
-A navigation that merely results from clicking a normal link/button is not normally persisted as an additional redundant `open` step. Explicit navigation operations and browser-context changes remain distinct operations.
+A scenario is allowed to omit an initial `open` when it intentionally starts from the current live browser state. In that case FlowTape identifies the current page before the first target-dependent step and fails if the required starting state cannot be established deterministically.
 
-### Click
+### 8.2 Click
 
 ```yaml
 - action: click
   target: ログイン
 ```
 
-### Double click
+### 8.3 Double click
 
 ```yaml
 - action: double_click
   target: 明細行
 ```
 
-### Input text
+### 8.4 Input
 
 ```yaml
 - action: input
-  target: メールアドレス
-  value: test@example.com
+  target: 検索欄
+  value: ${search_word}
 ```
 
-`input` expresses replacing/entering a value into an editable element. More specialized typing behavior may be added separately if needed.
+`input` expresses replacing/entering the value of an editable element.
 
-### Select
+### 8.5 Select
 
 ```yaml
 - action: select
@@ -203,53 +199,235 @@ A navigation that merely results from clicking a normal link/button is not norma
   value: 埼玉県
 ```
 
-### Read
+### 8.6 Read
 
-A step may read information from a target and store it in a variable.
-
-Conceptual example:
+Supported v1 read sources are `text`, `value`, and an explicit attribute.
 
 ```yaml
 - action: read
   target: 合計金額
+  source: text
   into: total
 ```
 
-The exact supported read sources (text/value/attribute/etc.) will be specified before implementation of this action family.
-
-### Wait/check operations
-
-The DSL must support waiting/checking for browser state without requiring arbitrary Python expressions.
-
-The exact action names and option schema for generic waits remain to be finalized.
-
-### Window/tab context
-
-The DSL must leave room for explicit browser-context transitions such as switching to a newly opened tab/window and returning to a previous one.
-
-Exact reserved action names remain to be finalized, but these are semantic browser-context operations and should be represented explicitly when needed for deterministic playback.
-
-## 9. Variables
-
-Values may reference variables.
-
-Example:
-
 ```yaml
-- action: input
-  target: パスワード
-  value: ${PASSWORD}
+- action: read
+  target: メールアドレス
+  source: value
+  into: email
 ```
 
-Variables may originate from configuration, inputs, or `read` steps.
+```yaml
+- action: read
+  target: ダウンロードリンク
+  source:
+    attribute: href
+  into: download_url
+```
 
-The DSL must not permit arbitrary Python evaluation simply because a value contains an expression-like string.
+The resulting variable becomes a runtime variable.
 
-## 10. Conditions
+### 8.7 Upload
 
-Conditions are explicit structural blocks.
+DOM file inputs are supported without automating the native OS file chooser.
 
-Conceptual example:
+```yaml
+- action: upload
+  target: 添付ファイル
+  path: ${upload_file}
+```
+
+The target must resolve to a compatible DOM file input. Native file-selection dialogs are outside ordinary DOM automation in v1.
+
+### 8.8 Key operations
+
+Keyboard operations apply to Selenium-controlled web content, not arbitrary OS applications.
+
+```yaml
+- action: key
+  key: ENTER
+```
+
+```yaml
+- action: key
+  target: 検索欄
+  key: ESCAPE
+```
+
+```yaml
+- action: key
+  target: 検索欄
+  keys:
+    - CTRL
+    - A
+```
+
+### 8.9 Hover
+
+```yaml
+- action: hover
+  target: 設定
+```
+
+Hover is a first-class v1 action because menus and controls may depend on pointer-over state.
+
+### 8.10 Drag and drop
+
+```yaml
+- action: drag_drop
+  from: 未処理
+  to: 処理済み
+```
+
+v1 support is limited to cases that can be reproduced reliably through Selenium/ActionChains. FlowTape does not guarantee all custom HTML5/JavaScript drag implementations.
+
+### 8.11 JavaScript dialogs
+
+JavaScript `alert`, `confirm`, and `prompt` are browser context, not DOM targets.
+
+```yaml
+- action: alert_accept
+```
+
+```yaml
+- action: alert_dismiss
+```
+
+```yaml
+- action: alert_input
+  value: ABC123
+```
+
+`alert_input` supplies the prompt value; an explicit accept may follow where required by the implementation semantics.
+
+## 9. Wait and check
+
+`wait` and `check` are distinct.
+
+- `wait` waits until a condition becomes true or timeout expires.
+- `check` evaluates immediately and fails if the condition is false.
+
+Examples:
+
+```yaml
+- action: wait
+  until:
+    visible: ログイン完了
+  timeout: 10s
+```
+
+```yaml
+- action: wait
+  until:
+    not_exists: 読み込み中
+```
+
+```yaml
+- action: check
+  condition:
+    page: dashboard
+```
+
+### 9.1 Download completion
+
+Downloading itself is normally initiated by the relevant browser operation, often a click. Completion can be awaited explicitly:
+
+```yaml
+- action: wait
+  until:
+    download_complete: "*.csv"
+  timeout: 60s
+```
+
+The check applies to the configured download directory and must not treat an in-progress temporary download file as complete.
+
+## 10. Variables and credentials
+
+### 10.1 Ordinary scenario variables
+
+```yaml
+variables:
+  search_word: RTX 5090
+```
+
+Reference syntax:
+
+```text
+${search_word}
+```
+
+### 10.2 Credentials
+
+IDs/passwords are stored in external `credentials.yaml` and use a dedicated namespace:
+
+```text
+${credential.社内システム.username}
+${credential.社内システム.password}
+```
+
+Credential values must not be persisted into ordinary scenario steps, logs, diagnostics, or exception text after expansion. Recorder capture of password inputs must not serialize the entered plaintext password into `scenario.yaml`.
+
+The expected corporate environment may reset environment variables at logoff, so OS environment variables are not a required credential mechanism in v1.
+
+### 10.3 Runtime variables
+
+`read` and similar runtime operations may create variables used by later steps.
+
+No variable reference permits arbitrary Python/code evaluation.
+
+## 11. Conditions
+
+Conditions are explicit declarative structures. Initial condition vocabulary includes:
+
+```yaml
+exists: 次へ
+not_exists: 次へ
+visible: 次へ
+hidden: 次へ
+enabled: 次へ
+disabled: 次へ
+```
+
+Value/text checks:
+
+```yaml
+text_equals:
+  target: 状態
+  value: 完了
+```
+
+```yaml
+value_equals:
+  target: 件数
+  value: "10"
+```
+
+Page checks:
+
+```yaml
+page: order_confirm
+```
+
+Logical composition:
+
+```yaml
+all:
+  - exists: 次へ
+  - enabled: 次へ
+```
+
+```yaml
+any:
+  - exists: 完了
+  - exists: 終了
+```
+
+```yaml
+not:
+  exists: エラー
+```
+
+Example `if`:
 
 ```yaml
 - if:
@@ -257,32 +435,25 @@ Conceptual example:
   then:
     - action: click
       target: 次へ
+  else:
+    - action: read
+      target: メッセージ
+      source: text
+      into: result_message
 ```
 
-An `else` branch may be attached where needed.
-
-The condition vocabulary should be domain-oriented, for example element existence/state/value checks, rather than arbitrary code execution.
-
-Exact condition-schema details remain subject to further specification, but the following principles are fixed:
+Principles:
 
 - no arbitrary Python expression evaluation
 - condition result is explicit
-- target lookup follows the same resolver rules as normal actions
-- ambiguous target matching is not converted into truthiness
+- target lookup follows ordinary page/target resolver rules
+- ambiguous target/page matching is an error, not truthiness
 
-## 11. Loops
+## 12. Loops
 
-The DSL needs to represent at least:
+The DSL supports `repeat`, `for_each`, and `while`.
 
-- `repeat`
-- `for_each`
-- `while`
-
-The intended authoring flow is to record a normal linear range first and then wrap that range in the chosen loop block.
-
-### Repeat
-
-Conceptual example:
+### 12.1 Repeat
 
 ```yaml
 - repeat:
@@ -292,101 +463,187 @@ Conceptual example:
         target: 次へ
 ```
 
-### For each
+### 12.2 For each
 
-Conceptual example:
+The primary v1 collection source is a page-scoped DOM target collection.
 
 ```yaml
 - for_each:
-    source: 対象行
+    target: 注文一覧/行
     as: row
     steps:
       - action: click
         target: 編集
+        within: ${row}
 ```
 
-The final collection/source schema is not yet fixed. A `for_each` source denotes a collection and therefore is not subject to the ordinary single-target requirement that exactly one element resolve.
+A `for_each` collection intentionally resolves multiple members and therefore does not use the ordinary single-target uniqueness rule.
 
-### While
+Future array/value iteration may be added separately without changing this DOM-collection form.
 
-Conceptual example:
+### 12.3 While
 
 ```yaml
 - while:
     exists: 次へ
+    max_iterations: 100
+    timeout: 5m
     steps:
       - action: click
         target: 次へ
 ```
 
-Loop implementations must include safeguards against accidental unbounded execution. The exact limit/timeout schema will be fixed later.
+Loop safety is mandatory. `while` and other potentially unbounded loop forms are constrained by iteration and elapsed-time limits. Defaults may come from `config.yaml` and may be overridden per loop.
 
-## 12. Scope and `within`
+## 13. Dynamic scope and `within`
 
-Earlier selector design used explicit narrowing such as dialog/row/current context. With the introduction of the DOM registry, reusable DOM scope normally belongs in the target definition rather than being repeated in every scenario step.
+Reusable stable DOM context belongs in the registry. Dynamic execution context belongs in the scenario.
 
-A scenario-level `within` concept may still be useful for dynamic contexts such as a current loop row. The exact syntax remains open.
-
-The design rule is:
-
-- stable reusable DOM context -> `elements.yaml`
-- dynamic execution context -> scenario/control-flow context
-
-## 13. Action/type compatibility
-
-A target definition may declare a semantic `kind`, such as `button` or `input`.
-
-The validator should catch obvious incompatibilities before operation where possible.
-
-Example invalid combination:
+Example:
 
 ```yaml
-- action: input
-  target: ログイン
+- for_each:
+    target: 注文一覧/行
+    as: row
+    steps:
+      - action: click
+        target: 編集
+        within: ${row}
 ```
 
-when `ログイン` is registered as a button.
+`within` narrows target resolution to an execution-time context such as the current loop row. It is not a place for arbitrary raw CSS/XPath strings in normal scenario authoring.
 
-## 14. Ambiguity behavior
+## 14. Browser windows and tabs
 
-Scenario execution must never interpret a target as "the first matching element" unless an explicitly positional target definition deliberately requests that behavior.
+Browser-context transitions are explicit when required for deterministic playback.
 
-Rules:
+### 14.1 Switch to a newly opened window
 
-- zero matches -> wait according to timeout policy, then fail
-- one acceptable match -> proceed
+```yaml
+- action: switch_window
+  to: newest
+```
+
+When an operation in window A causes window B to appear, FlowTape records the FlowTape-level parent relationship `B -> A` when deterministically observable.
+
+### 14.2 Explicit parent switch
+
+```yaml
+- action: switch_window
+  to: parent
+```
+
+### 14.3 Close current window
+
+```yaml
+- action: close_window
+```
+
+### 14.4 Automatic popup return
+
+If the current popup closes by itself:
+
+1. FlowTape detects that the current handle disappeared.
+2. If its recorded parent still exists, FlowTape automatically returns to that parent.
+3. FlowTape re-identifies the page in the parent window.
+4. Execution continues.
+
+The scenario therefore does not need an explicit `switch_window: parent` merely to model the normal consequence of a popup closing itself.
+
+If the popup remains open, FlowTape stays there until an explicit context action changes it.
+
+If the correct return target cannot be determined uniquely, execution fails instead of switching to an arbitrary remaining window.
+
+## 15. Page transitions
+
+Page identity is defined in `elements.yaml`; scenario steps normally reference logical targets without repeating page names.
+
+A scenario may explicitly validate a transition:
+
+```yaml
+- action: wait
+  until:
+    page: dashboard
+  timeout: 10s
+```
+
+or:
+
+```yaml
+- action: check
+  condition:
+    page: order_confirm
+```
+
+## 16. Action/type compatibility
+
+The validator catches obvious incompatibilities before operation where possible.
+
+Examples include:
+
+- `input` against a button
+- `upload` against a non-file element
+- `select` against an incompatible target kind
+
+## 17. Ambiguity behavior
+
+Single-target operations:
+
+- zero acceptable matches -> wait according to timeout policy where applicable, then fail
+- exactly one acceptable match -> proceed
 - more than one acceptable match -> ambiguity error
 
-This applies to actions and condition checks. Collection sources used by `for_each` follow their own collection-validation semantics.
+Collection sources intentionally have separate multi-member validation semantics.
 
-## 15. Recorder metadata
+Explicit positional matching is allowed only when deliberately encoded as a fragile fallback in the target registry.
 
-Recorder-generated diagnostic metadata may be associated with recorded steps internally or through a reserved metadata area such as `_meta`.
+## 18. Recorder metadata
 
-Such metadata must not become required hand-written scenario content and must not alter the visible semantic meaning of the procedure.
+Recorder-generated diagnostic metadata must not become required hand-written procedure content.
 
-The final persisted `_meta` schema is not yet fixed.
+A reserved `_meta` area may be used sparingly for stable node identity or recorder/version bookkeeping when required by editor semantics. Candidate scores, raw DOM snapshots, event coordinates, rejected candidates, and other verbose capture internals should remain in diagnostics/logs rather than normal scenario YAML.
 
-Stable node identifiers may be persisted in metadata or another reserved field where needed by the editor. Visible step numbers are not persisted identity.
+Visible step numbers are presentation-only and are not persistent identity.
 
-## 16. Explicit exclusions
+## 19. Optional human-readable descriptions
+
+Steps and structural blocks may carry semantically inert human-readable notes/descriptions for procedure-document readability. The implementation may standardize a key such as `description`; the value has no execution meaning in v1.
+
+## 20. Playback control is not scenario mode
+
+Playback pacing remains runtime/editor state rather than scenario semantics.
+
+Examples:
+
+- normal playback
+- slow observation delay
+- single-step playback
+- pause/resume/stop
+- execute until selected position
+- play to current end and continue recording
+
+These controls do not redefine `mode: 実行/確認/デバッグ`.
+
+## 21. Explicit exclusions
 
 Initial DSL design excludes:
 
 - embedded Python
 - arbitrary code/eval expressions
 - unrestricted `goto`
-- silent implicit fallback to the first DOM match
-- requiring CSS-only or XPath-only target definitions
+- silent implicit fallback to the first DOM/page/window match
+- mandatory raw CSS/XPath authoring in scenario steps
+- native OS-dialog automation as ordinary DOM actions
 
-## 17. Example scenario
-
-The following example demonstrates the intended style. Some advanced collection/read syntax is illustrative until those sub-schemas are finalized.
+## 22. Example scenario
 
 ```yaml
 version: 1
 name: 商品検索と明細処理
 mode: 実行
+
+variables:
+  search_word: RTX 5090
 
 steps:
   - action: open
@@ -394,48 +651,40 @@ steps:
 
   - action: input
     target: 検索欄
-    value: RTX 5090
+    value: ${search_word}
 
-  - action: click
-    target: 検索
+  - action: key
+    target: 検索欄
+    key: ENTER
+
+  - action: wait
+    until:
+      page: search_results
+    timeout: 10s
 
   - if:
-      exists: 検索結果/商品一覧
+      exists: 商品一覧
     then:
-      - action: click
-        target: 検索結果/RTX 5090
+      - for_each:
+          target: 商品一覧/行
+          as: row
+          max_iterations: 1000
+          timeout: 5m
+          steps:
+            - action: read
+              target: 商品名
+              within: ${row}
+              source: text
+              into: item_name
     else:
       - action: read
-        target: 検索結果/メッセージ
+        target: メッセージ
+        source: text
         into: result_message
 
-  - while:
-      exists: 次へ
-    steps:
-      - action: click
-        target: 次へ
-
   - action: click
-    target: 商品詳細/カートに入れる
-    risk: 更新
-
-  - action: click
-    target: 注文確認/注文を確定
+    target: 注文を確定
     risk: 破壊的
 ```
 
-This example is deliberately semantic: DOM mechanics remain in the target registry.
-
-## 18. Playback control is not scenario mode
-
-Playback pacing is intentionally not represented by `mode`.
-
-`実行` / `確認` / `デバッグ` describe what the engine does with a step. UI/runtime choices such as normal playback, slow playback, single-step playback, pause, execute-until-position, or play-to-end-and-record describe how execution is scheduled interactively.
-
-Those controls should normally remain runtime/editor state rather than procedure semantics in scenario YAML.
-
-## 19. Optional human-readable descriptions
-
-Steps and structural blocks may carry an optional description/note intended for procedure-document readability.
-
-The exact key name is not yet frozen, but the field must remain semantically inert unless a future specification explicitly assigns execution meaning to it.
+DOM mechanics remain in the scenario-local page-scoped target registry.
