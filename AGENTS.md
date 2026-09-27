@@ -27,6 +27,11 @@ The current specifications are split as follows:
 - `docs/04-target-registry.md` — logical targets and `elements.yaml`
 - `docs/05-locator-generation.md` — DOM capture, locator generation, scoring, and fallback selection
 - `docs/06-runtime-platform.md` — packaging, Selenium/Edge, and cross-platform constraints
+- `docs/07-data-schema.md` — strict persisted schema for scenario, registry, config, credentials, outputs, and validation boundaries
+- `docs/08-recorder-protocol.md` — browser-side Recorder protocol, RawCaptureEvent normalization, IME/input, navigation capture, reinjection, and picker behavior
+- `docs/09-runtime-semantics.md` — Player execution semantics, resolver behavior, modes, waits, loops, outputs, retries, and playback control
+
+When multiple documents touch the same subject, the more specific document governs its own layer. In particular, persisted field legality comes from `07-data-schema.md`, Recorder event behavior comes from `08-recorder-protocol.md`, and Player execution behavior comes from `09-runtime-semantics.md`.
 
 If implementation and documentation disagree, do not silently reinterpret the specification. Either update the implementation to match the documented decision or explicitly update the specification as part of the same change.
 
@@ -119,7 +124,7 @@ Do not bake user scenarios or environment-specific paths into packaged code.
 - Validation errors should identify the scenario step, target name, and reason.
 - Diagnostic output should expose locator candidates and resolution reasons without leaking the complete DOM into normal scenario files.
 - Keep generated locator scores as diagnostics/internal metadata unless a specification explicitly promotes them into the persisted schema.
-- Add tests for resolver ambiguity, zero matches, semantic locator preference, dynamic-ID rejection, frame/shadow context, and structural DSL behavior as those modules are implemented.
+- Add tests for resolver ambiguity, zero matches, semantic locator preference, dynamic-ID rejection, frame/shadow context, structural DSL behavior, output validation, Recorder event normalization, and runtime mode differences as those modules are implemented.
 
 ## Specification changes
 
