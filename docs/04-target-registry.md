@@ -10,95 +10,170 @@ Example:
 
 ```yaml
 - action: click
-  target: ログイン
+  target: 保存
 ```
 
-The DOM information required to locate `ログイン` is stored separately in `elements.yaml`.
+The DOM information required to locate `保存` is stored separately in the scenario-local `elements.yaml`.
 
 Conceptually:
 
 ```text
-scenario target name
-    -> target definition
+scenario package
+    -> identify current page
+    -> resolve page-scoped logical target
     -> locator candidates
     -> current DOM element
 ```
 
-## 2. Why the registry is separate
+## 2. Scenario-local ownership
 
-A single real-world target may require multiple kinds of information to resolve reliably:
+The first implementation uses one DOM registry per scenario package rather than one global registry shared by unrelated scenarios.
 
-- role
-- accessible name
-- label
-- id
-- name
-- test attribute
-- visible text
-- stable ancestor context
-- dialog/table-row/form context
-- iframe path
-- shadow-root path
-- CSS
-- XPath
+Recommended layout:
 
-Putting all of that into every scenario step would make scenario YAML difficult to read and maintain.
+```text
+scenarios/
+  注文処理/
+    scenario.yaml
+    elements.yaml
+```
 
-The registry therefore stores DOM knowledge while scenario YAML stores procedure logic.
+The `elements.yaml` located beside `scenario.yaml` is implicitly associated with that scenario.
 
-## 3. Initial file shape
+Benefits:
+
+- unrelated scenarios may use the same logical target names safely
+- DOM repair impact stays local
+- scenarios are portable as directories
+- deletion/rename/reference validation remains predictable
+
+Shared site/project registries may be introduced later as an explicit feature.
+
+## 3. Page-scoped registry shape
+
+A single scenario may navigate through URLs and DOM structures that differ substantially. Therefore targets are grouped by logical page scope.
 
 Recommended initial format:
 
 ```yaml
 version: 1
 
-elements:
-  メールアドレス:
-    kind: input
+pages:
+  login:
+    identify:
+      url:
+        contains: /login
 
-    locate:
-      - by: label
-        value: メールアドレス
+    elements:
+      ユーザーID:
+        kind: input
+        locate:
+          - by: label
+            value: ユーザーID
+          - by: name
+            value: username
+        expect:
+          tag: input
+          editable: true
+        fingerprint:
+          text: ユーザーID
 
-      - by: id
-        value: email
+      ログイン:
+        kind: button
+        locate:
+          - by: role
+            role: button
+            name: ログイン
+        expect:
+          role: button
+          enabled: true
+        fingerprint:
+          text: ログイン
 
-      - by: name
-        value: email
+  order_confirm:
+    identify:
+      all:
+        - url:
+            contains: /orders/
+        - exists:
+            role: heading
+            name: 注文確認
+        - exists:
+            role: button
+            name: 注文を確定
 
-      - by: css
-        value: 'input[type="email"]'
-
-    expect:
-      tag: input
-      role: textbox
-      input_type: email
-      editable: true
-
-  ログイン:
-    kind: button
-
-    locate:
-      - by: testid
-        value: login-submit
-
-      - by: role
-        role: button
-        name: ログイン
-
-      - by: text
-        value: ログイン
-        exact: true
-
-    expect:
-      role: button
-      enabled: true
+    elements:
+      注文を確定:
+        kind: button
+        locate:
+          - by: role
+            role: button
+            name: 注文を確定
+        expect:
+          role: button
+          enabled: true
+        fingerprint:
+          text: 注文を確定
 ```
 
-The exact schema can evolve, but the separation between `locate`, `expect`, and optional diagnostic/fingerprint information is intentional.
+The separation between page identification, `locate`, `expect`, context, and diagnostic fingerprint data is intentional.
 
-## 4. `kind`
+## 4. Page identification
+
+A page definition may be identified by:
+
+- URL conditions
+- DOM conditions
+- both together
+
+URL alone must not be required because SPA-style interfaces may substantially change screen state without changing URL.
+
+DOM evidence should be semantic where practical, such as distinctive headings, roles, labels, or controls.
+
+Resolution rule:
+
+```text
+0 matching page definitions  -> UnknownPage
+1 matching page definition   -> use it
+2+ matching page definitions -> AmbiguousPage
+```
+
+The registry order must not be used as an implicit tie-breaker.
+
+Page names are registry identifiers such as `login`, `dashboard`, or `order_confirm`. Normal scenario steps do not need to repeat them because FlowTape identifies the current page before target resolution.
+
+## 5. Logical target names
+
+Target names are user-facing and may be Japanese.
+
+Examples:
+
+```text
+メールアドレス
+ログイン
+保存
+注文を確定
+```
+
+A logical target name needs to be unique only within its page scope.
+
+Thus this is valid:
+
+```text
+profile page:      保存
+notification page: 保存
+```
+
+Within one page, contextual namespacing remains preferred when the same human-facing concept appears multiple times:
+
+```text
+配送先/編集
+支払方法/編集
+```
+
+The `/` separator is a readable naming convention rather than a DOM path.
+
+## 6. `kind`
 
 `kind` is a semantic classification used for readability and action compatibility checks.
 
@@ -116,21 +191,15 @@ Initial useful kinds include:
 - `file`
 - `element`
 
-It is not itself a Selenium locator.
+It is not itself a locator.
 
-Example:
+The validator may reject or warn about clearly incompatible operations, such as `input` against a button or `upload` against a non-file target.
 
-```yaml
-kind: button
-```
+## 7. `locate`
 
-The validator may reject or warn about clearly incompatible operations, such as using `input` against a target registered as a button.
+`locate` is an ordered list of independently useful ways to find a target.
 
-## 5. `locate`
-
-`locate` is an ordered list of independently useful ways to find the target.
-
-Supported initial locator families should include:
+Initial locator families include:
 
 - `testid`
 - `id`
@@ -156,24 +225,23 @@ locate:
     value: profile-save
 ```
 
-The Target Resolver tries persisted locator candidates in order, while still applying match-count and expectation rules.
+The Target Resolver tries persisted candidates in order while still applying uniqueness and expectation rules.
 
-## 6. `expect`
+## 8. `expect`
 
 `expect` describes what the resolved element is supposed to be.
 
 It answers a different question from `locate`:
 
 - `locate`: where/how can the target be found?
-- `expect`: is the found element really an acceptable target?
+- `expect`: is the found element acceptable?
 
-Potential fields include:
+Example:
 
 ```yaml
 expect:
   tag: input
   role: textbox
-  text: メールアドレス
   input_type: email
   visible: true
   enabled: true
@@ -182,22 +250,13 @@ expect:
     autocomplete: email
 ```
 
-Not every field should be emitted for every element.
+Not every field should be emitted for every element. Expectations should prevent mistaken matches without over-constraining incidental presentation details.
 
-Expectations must remain strong enough to prevent mistaken matches but not so strict that incidental presentation changes break otherwise-correct targets.
-
-## 7. Relative locators
+## 9. Relative locators
 
 When an element is not uniquely identifiable by itself, FlowTape may use surrounding semantic context.
 
-Example table:
-
-```text
-山田太郎   [編集]
-鈴木一郎   [編集]
-```
-
-A useful definition is conceptually:
+Example:
 
 ```yaml
 - by: relative
@@ -217,106 +276,63 @@ Typical relative contexts include:
 - section
 - descendant of stable ancestor
 - heading-associated area
-- nearby label/text
+- nearby text
 
-Relative locators are not automatically weak. A semantically stable row/section relationship may be stronger than a structural CSS path.
+A semantically stable relative locator may be stronger than a structural CSS path.
 
-## 8. Context: iframe and Shadow DOM
+## 10. Ordered iframe and Shadow DOM context
 
-Traversal context is separate from the element locator itself.
-
-Example iframe context:
-
-```yaml
-決済/支払う:
-  kind: button
-
-  context:
-    frame:
-      - id: payment-frame
-
-  locate:
-    - by: role
-      role: button
-      name: 支払う
-```
-
-Conceptual shadow context:
-
-```yaml
-context:
-  shadow:
-    - css: app-shell
-    - css: payment-panel
-```
-
-Resolution order is:
-
-```text
-enter context
-    -> locate candidate
-    -> expectation validation
-```
-
-Nested/mixed frame-shadow rules need exact implementation details before those advanced cases are coded, but the persisted model must leave room for them.
-
-## 9. Logical target names
-
-Target names are user-facing and may be Japanese.
-
-Examples:
-
-```text
-メールアドレス
-ログイン
-次へ
-注文を確定
-```
-
-When the same visible concept occurs in multiple places, use contextual namespacing:
-
-```text
-プロフィール/保存
-通知設定/保存
-```
-
-The separator `/` is intended as a readable namespace convention rather than a DOM path.
-
-## 10. Unbound targets
-
-Scenario YAML may temporarily reference a target that is not present in the registry.
+Traversal context is separate from the element locator and is represented as an ordered sequence so mixed nesting can be expressed.
 
 Example:
 
 ```yaml
-- action: click
-  target: 注文を確定
+context:
+  - frame:
+      id: payment-frame
+  - shadow:
+      css: app-shell
+  - shadow:
+      css: payment-panel
 ```
 
-If `注文を確定` has no registry definition, it is an `UnboundTarget` state.
+Conceptual resolution:
 
-This is valid while authoring but prevents successful normal execution of that step.
+```text
+current document
+    -> enter frame
+    -> enter shadow root
+    -> enter shadow root
+    -> apply locator candidate
+    -> expectation validation
+```
 
-Bind mode lets the user select the real element and creates the missing definition through the Element Capture Engine.
+This representation also leaves room for mixed sequences such as frame -> shadow -> frame.
 
-## 11. Multiple matches
+## 11. Unbound targets
 
-No locator is allowed to mean "use the first match" by default.
+Scenario YAML may temporarily reference a target that is not present in the applicable page scope.
 
-For each locator candidate:
+This is valid while authoring but prevents successful normal execution.
 
-1. search current DOM within its context
+Bind mode lets the user reach the intended page, select the real element, and create the missing definition through the Element Capture Engine.
+
+## 12. Multiple matches
+
+No ordinary locator means "use the first match" by default.
+
+For each single-target locator candidate:
+
+1. search within the current page/traversal/dynamic scope
 2. inspect matches
-3. apply expectations where applicable
+3. apply expectations
 4. accept only one resulting target
 
-If more than one acceptable element remains, that locator has not resolved the target uniquely.
+If multiple acceptable elements remain and later candidates cannot resolve the ambiguity, execution fails.
 
-If later locators cannot resolve the ambiguity, execution fails with an ambiguity diagnostic.
+## 13. Positional matching
 
-## 12. Positional matching
-
-Position/index matching may be supported as a last resort.
+Position/index matching is supported only as a last-resort fragile fallback.
 
 Example:
 
@@ -330,15 +346,14 @@ Example:
 
 Rules:
 
-- never generate positional matching as a preferred candidate when a semantic alternative exists
-- mark persisted positional definitions as fragile
-- expose the fragility in diagnostics
+- never generate positional matching as the preferred candidate when a semantic alternative exists
+- persisted positional definitions must be marked `fragile: true`
+- fragility must be visible in diagnostics
+- `nth-child`, absolute DOM position, and absolute XPath are treated similarly
 
-`nth-child`, absolute DOM position, and similar selectors are treated similarly.
+## 14. Fingerprint
 
-## 13. Fingerprint
-
-The registry may preserve a small amount of auxiliary information not used as a primary search condition.
+Each normal target definition should preserve a small diagnostic fingerprint when useful source information exists.
 
 Example:
 
@@ -351,33 +366,33 @@ fingerprint:
     type: submit
 ```
 
-Potential uses:
+Fingerprint uses include:
 
 - DOM-change diagnostics
-- explaining ambiguous matches
+- explaining ambiguous or failed matches
 - assisting repair/rebinding
 
-Fingerprint information must not become a hidden fuzzy-click system that bypasses the unique-resolution rules.
+Fingerprint is not a hidden fuzzy-click mechanism and must never bypass unique-resolution rules.
 
-## 14. What not to persist normally
+The registry should not store a full DOM snapshot merely to create a fingerprint.
 
-The registry should not become a full browser dump.
+## 15. What not to persist normally
 
 Do not normally persist:
 
 - complete DOM HTML
-- every attribute of the target
-- complete ancestor chain
-- screen coordinates as the primary identity
-- every generated locator candidate
+- every target attribute
+- complete ancestor chains
+- screen coordinates as identity
+- every generated candidate
 - candidate score tables
 - rejected candidates
 
 Those belong in diagnostics/logs where needed.
 
-## 15. Candidate diversity
+## 16. Candidate diversity
 
-Multiple saved locators should represent genuinely different evidence where practical.
+Persisted locator fallbacks should represent genuinely different evidence.
 
 Bad fallback set:
 
@@ -387,9 +402,9 @@ CSS #profile-save
 XPath //*[@id='profile-save']
 ```
 
-All three fail together if the ID changes.
+All depend on the same ID.
 
-Better fallback set:
+Better:
 
 ```text
 role + accessible name
@@ -397,9 +412,52 @@ stable test attribute
 heading/section-relative locator
 ```
 
-The Element Capture Engine should deduplicate candidates based on their underlying evidence, not just their serialized syntax.
+The Element Capture Engine should deduplicate by underlying evidence, not merely serialized syntax.
 
-## 16. Persistence philosophy
+## 17. Collection definitions
+
+`for_each` source definitions are semantically different from ordinary single-element targets.
+
+A collection source may be captured by selecting one representative row/item and deriving candidate definitions that match the corresponding set.
+
+Before persistence, FlowTape should preview/highlight current members so the user can confirm the intended collection.
+
+Collection resolution intentionally permits multiple members and does not inherit the ordinary single-target uniqueness rule.
+
+Collection definitions still belong to the current page scope.
+
+## 18. Dynamic execution scope
+
+Stable reusable DOM context belongs in `elements.yaml`; execution-time context such as the current `for_each` row belongs in scenario control flow.
+
+For example, `within: ${row}` narrows resolution of a page-scoped logical target to the current collection member without duplicating selectors in scenario YAML.
+
+## 19. Rename semantics
+
+Renaming a logical target through FlowTape is an atomic semantic operation inside its page scope:
+
+```text
+old registry key
+    -> new registry key
+    -> update all known scenario references that refer to that page-scoped target
+```
+
+Known references must not be silently left pointing at the old name.
+
+External/manual edits may create unresolved references; validation reports them normally.
+
+## 20. Delete semantics
+
+Deleting a registered target must account for scenario references.
+
+If referenced, FlowTape should either:
+
+- block deletion and show referencing locations, or
+- require explicit destructive confirmation that knowingly leaves references unbound
+
+Silent deletion of a referenced target is not allowed.
+
+## 21. Persistence philosophy
 
 `elements.yaml` should remain editable and understandable, but it is primarily machine-generated.
 
@@ -411,52 +469,3 @@ Normal creation/update paths are:
 - Rebind/repair
 
 Users may hand-edit it, but they should not be required to write complex DOM definitions from scratch.
-
-## 17. Initial ownership model
-
-For the first implementation, one scenario should normally own one corresponding DOM registry rather than sharing one global `elements.yaml` across unrelated scenarios.
-
-Acceptable packaging patterns include for example:
-
-```text
-login/
-  scenario.yaml
-  elements.yaml
-```
-
-or an equivalent clearly paired naming convention.
-
-This keeps target-name collisions, repair impact, portability, and deletion semantics local and predictable. Shared site/project registries may be introduced later as an explicit feature rather than assumed from the beginning.
-
-## 18. Rename semantics
-
-Renaming a logical target through the FlowTape UI is an atomic semantic operation:
-
-```text
-old registry key
-    -> new registry key
-    -> update all references in the associated scenario
-```
-
-The UI must not leave known scenario references pointing at the old name after a successful rename.
-
-External/manual edits may still create unresolved references; validation reports those as normal unbound-target errors.
-
-## 19. Delete semantics
-
-Deleting a registered target must account for references from the associated scenario.
-
-If the target is still referenced, the UI should either:
-
-- block deletion and show the referencing steps/conditions, or
-- require an explicit destructive confirmation that leaves those references unbound
-
-Silent deletion of a referenced target is not allowed.
-
-## 20. Collection definitions
-
-`for_each` source definitions are semantically different from ordinary single-element targets.
-
-A collection source may be captured by selecting one representative item and deriving candidate definitions that match the corresponding set. Before persistence, FlowTape should preview/highlight the resulting current members and let the user confirm the intended collection.
-
-Collection resolution must not inherit the single-target rule that exactly one element must remain. Its validation instead checks that the source definition denotes the intended iterable set according to the collection schema.
