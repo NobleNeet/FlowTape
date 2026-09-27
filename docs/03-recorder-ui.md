@@ -339,3 +339,229 @@ The first usable Recorder should prioritize:
 - invoking Element Picker from DOM-dependent condition/loop properties
 
 Advanced visual editing can follow after these core semantics are stable.
+
+## 17. Recorder interaction modes
+
+The initial UI should distinguish three browser-interaction intents:
+
+- Record: normal browser operations are converted into scenario steps
+- Pick: browser clicks indicate an element for a target/condition/source without recording the click as a normal step
+- Rebind: browser selection replaces the DOM definition for an existing logical target
+
+These modes may share internal picker/capture machinery, but the user-facing intent should remain explicit.
+
+Recording is controlled by an explicit start/stop action. Stopping recording does not close the Selenium browser; the browser remains available for editing, picking, rebinding, validation, and resumed recording.
+
+## 18. Step selection and structural editing
+
+The scenario list should support conventional desktop selection behavior:
+
+- normal click: select one step/block
+- Shift-click: select a contiguous range
+- Ctrl-click: may select multiple items for generic operations
+
+Control-flow wrapping operations require one contiguous range. Discontiguous selections must not be silently converted into a block.
+
+After selecting a contiguous range, the UI should offer operations such as:
+
+```text
+条件付きにする
+繰り返しにする
+グループ化
+削除
+```
+
+The user should not be required to draw block brackets manually.
+
+For `if`, the `else` branch is added deliberately through an action such as `それ以外を追加`; an empty `else` branch is not created automatically.
+
+For loops, user-facing choices should use natural language:
+
+```text
+各対象について      -> for_each
+条件を満たす間      -> while
+指定回数            -> repeat
+```
+
+DSL terminology may still be shown secondarily for advanced users.
+
+## 19. For-each source selection
+
+`for_each` requires collection semantics rather than merely one uniquely resolvable element.
+
+The preferred authoring flow is:
+
+```text
+choose "各対象について"
+    -> choose "ブラウザから繰り返し対象を指定"
+    -> user selects one representative row/item
+    -> FlowTape derives candidate collection selectors
+    -> browser highlights all current members
+    -> UI shows detected count/examples
+    -> user confirms or chooses another candidate
+```
+
+The collection definition must remain distinct from a normal single-target definition even if both reuse capture/scoring infrastructure.
+
+## 20. Step insertion and resumed recording
+
+Existing scenarios must support insertion recording.
+
+Between steps, the editor may expose an insertion affordance such as `+`. From that position the user may:
+
+- add a step manually
+- start recording from this insertion point
+
+Existing later steps remain intact. Newly recorded steps are inserted at the chosen position when recording stops.
+
+The same concept applies to extending a partially completed scenario: FlowTape can play the existing scenario to its current end, stop there, and switch to recording so the user can demonstrate the continuation.
+
+## 21. Playback control
+
+Execution semantics (`実行` / `確認` / `デバッグ`) and playback pacing are separate dimensions.
+
+The UI should support at least:
+
+- normal continuous playback
+- slow playback with a configurable observation delay after each completed step
+- single-step playback, waiting for the user after each step
+- execute until a selected position and pause
+- pause/resume/stop
+- play to current scenario end and continue recording
+
+Slow playback adds an observation delay after the normal step completion/wait logic; it must not replace proper Selenium waits with fixed sleeps.
+
+A typical control surface may expose:
+
+```text
+モード: [実行 ▼]
+再生:   [通常 / 1秒 / 2秒 / 5秒 / ステップ ▼]
+
+[最初から実行]
+[選択位置まで]
+[1ステップ]
+[一時停止]
+[停止]
+[ここから記録]
+[続きを記録]
+```
+
+Breakpoint-style stopping may be added later, but selected-position execution is sufficient for the first implementation.
+
+## 22. Editing while paused
+
+Editing while playback is paused is supported.
+
+If the user edits only not-yet-executed steps, execution may continue normally after validation.
+
+If the user edits a step that has already contributed to the current browser state, FlowTape must warn that the live browser state reflects the old scenario. The UI should offer at least:
+
+- restart from the beginning
+- continue from the current browser state anyway
+
+The application must not silently pretend that retroactive edits have changed the already-established browser state.
+
+## 23. Playback failure and repair
+
+When execution fails, FlowTape should stop at the affected step instead of reducing the failure to a terminal modal error.
+
+The failed step should be visibly marked and its details shown in the properties/diagnostics pane.
+
+Useful recovery actions include:
+
+```text
+Targetを再指定
+このStepを再試行
+次のStepへ
+先頭から再実行
+```
+
+The availability of `次のStepへ` does not imply that skipping is safe; the UI may warn when the failed operation is likely to affect later state.
+
+## 24. Recording-event normalization
+
+Raw DOM/browser events must not map one-to-one to scenario steps.
+
+Examples:
+
+- `mousedown` + `mouseup` + `click` normally becomes one `click`
+- text entry is accumulated and becomes one `input` step when the value is committed, focus leaves the field, Enter commits it, or another meaningful boundary is reached
+- internal hover/highlight/picker events never become application steps
+
+The Recorder should preserve the user's semantic action, not the browser's low-level event stream.
+
+A normal link/button click that causes page navigation remains primarily the click step. The resulting navigation should not normally create a second redundant `open` step.
+
+Explicit navigation actions such as direct URL opening, back, forward, refresh, or meaningful window/tab context changes are separate scenario operations.
+
+## 25. Tabs, windows, frames, and context
+
+The first implementation should support ordinary new-tab/new-window workflows sufficiently to record and replay them.
+
+When a user operation opens or selects another browser window/tab, the scenario/UI should represent the context change in human-readable form such as:
+
+```text
+新しいタブへ移動
+元のタブへ戻る
+```
+
+Exact DSL action names may remain conventional English internally.
+
+iframe and Shadow DOM context normally belong to target definitions. The UI should show relevant context such as `iframe内` in target details/diagnostics without requiring the user to hand-write frame selectors.
+
+## 26. Save, external edits, and recovery
+
+Normal scenario editing uses explicit save rather than unconditional autosave.
+
+The application should visibly indicate unsaved changes, for example near the scenario title.
+
+A private crash-recovery/autosave mechanism may maintain temporary recovery state, but it must not silently replace the user's scenario file.
+
+If the scenario or registry file changes externally while open, FlowTape should detect the change and ask the user whether to reload/reconcile it. Unsaved GUI state must not be silently overwritten.
+
+## 27. Step identity, numbering, and descriptions
+
+Visible step numbers are presentation-only and are recalculated from current execution order.
+
+Scenario nodes should have stable internal/persisted identities where needed for GUI state, undo/redo, diagnostics, and edit tracking. A visible number such as `05` is not the identity of the step.
+
+Steps and structural blocks may carry an optional human-readable description/note for procedure-document purposes.
+
+## 28. Undo/redo and block manipulation
+
+The Scenario Editor should maintain an undo/redo stack for editing operations such as:
+
+- add/delete/move step
+- wrap/unwrap block
+- edit condition/loop properties
+- rename target references where applicable
+
+Undo/redo operates on the scenario/editor model. It does not undo side effects already performed in the real browser or remote application.
+
+Unwrapping a condition/loop preserves its contained steps in place rather than deleting them.
+
+Drag-and-drop step reordering is allowed, including movement across block boundaries when the resulting structure is valid. Invalid structural moves must be rejected rather than producing malformed YAML.
+
+There is no fixed semantic nesting-depth limit, but the UI may warn when deep nesting harms readability.
+
+## 29. Risk UI
+
+Risk metadata remains independent from playback mode.
+
+For `risk: 破壊的`, the UI should support confirmation or execution gating before the operation. Whether confirmation is required every time should be configurable rather than permanently hard-coded.
+
+Risk warnings should not be used as a substitute for correct target validation.
+
+## 30. Search, YAML view, shortcuts, and theme
+
+The scenario view should eventually support filtering/search by at least:
+
+- target name
+- action type
+- optional description/note
+
+Direct YAML access is supported, but the initial UI may place it in a separate tab/view or open the file externally. Real-time two-way editing between raw YAML and the structural GUI is not required for the first implementation.
+
+Common keyboard shortcuts such as save, playback/pause, and single-step execution are desirable but may follow after the core button-driven workflow is stable.
+
+The initial desktop UI may use the platform/default Qt appearance. Dedicated light/dark theming is not required for the first implementation.
