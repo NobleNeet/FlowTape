@@ -19,6 +19,8 @@ human operation
     -> browser execution
 ```
 
+FlowTape may also collect small amounts of structured/textual data during browser workflows through explicit `read` and `append` actions. This is a lightweight result-output capability, not a general-purpose scraping/programming environment.
+
 ## 2. Core goals
 
 FlowTape should satisfy all of the following:
@@ -31,7 +33,8 @@ FlowTape should satisfy all of the following:
 6. Conditions and loops can be added after recording by wrapping ranges of existing steps.
 7. Playback is conservative: ambiguous target, page, or window resolution must not silently choose an arbitrary candidate.
 8. Browser/DOM logic should work similarly across Linux development and Windows 11 + Edge deployment.
-9. Scenario files, DOM knowledge, runtime configuration, credentials, browser profile state, and WebDriver placement remain external to the packaged executable where appropriate.
+9. Scenario files, DOM knowledge, runtime configuration, credentials, browser profile state, WebDriver placement, and generated outputs remain external to the packaged executable where appropriate.
+10. Simple values read from pages may be explicitly accumulated into CSV, JSON Lines, or text outputs for later user processing/aggregation.
 
 ## 3. Scenario package
 
@@ -67,6 +70,8 @@ Scenario YAML describes procedure semantics:
 - conditions and loops
 - logical target names
 - browser/window context operations
+- named result-output definitions
+- explicit `append` steps that persist collected values
 
 Example:
 
@@ -89,6 +94,19 @@ steps:
 
   - action: click
     target: ログイン
+```
+
+Result-output example:
+
+```yaml
+outputs:
+  ticket_log:
+    format: csv
+    file: ticket_log.csv
+    existing: new
+    columns:
+      - ticket_id
+      - author
 ```
 
 Raw CSS/XPath is not the normal scenario representation.
@@ -156,7 +174,19 @@ ${credential.社内システム.username}
 ${credential.社内システム.password}
 ```
 
-Credential values must not be written to normal logs or debug output. `credentials.yaml` must not be committed to source control; a placeholder/example file may be committed instead.
+Credential values must not be written to normal logs, debug output, or scenario result outputs. `credentials.yaml` must not be committed to source control; a placeholder/example file may be committed instead.
+
+### 4.5 Generated outputs
+
+Scenario outputs are user-requested execution artifacts, distinct from FlowTape system logs and browser downloads.
+
+v1 supports:
+
+- CSV for spreadsheet/manual aggregation workflows
+- JSON Lines for simple machine processing
+- text for line-oriented result logging
+
+Scenario files declare logical outputs using relative file names. The environment-specific root directory is provided by `config.yaml` through `paths.outputs`.
 
 ## 5. Product components
 
@@ -170,6 +200,7 @@ FlowTape is organized conceptually into:
 - Target Resolver
 - Player
 - Window/Browser Context Manager
+- Result Output Writer
 - YAML parser/validator
 - Runtime configuration layer
 - Credential provider
@@ -188,6 +219,7 @@ Start Recorder
     -> pages and DOM targets are captured/named
     -> scenario + scenario-local elements registry are generated
     -> user optionally adds conditions/loops
+    -> user may explicitly add read/append steps for result collection
     -> validate
     -> play back
 ```
@@ -208,6 +240,26 @@ This is an allowed authoring state. Bind mode then asks the user to select the c
 A user may open a page, enter element-picking mode, click a DOM element, assign a logical name, and register it independently of full scenario recording.
 
 Recorder, Picker, Bind, and Rebind reuse the same Element Capture Engine.
+
+### 6.4 Lightweight data-collection workflow
+
+A scenario may read a DOM value into a runtime variable and then explicitly append it to a named output while continuing normal browser automation.
+
+Example:
+
+```yaml
+- action: read
+  target: 起票者
+  source: text
+  into: author
+
+- action: append
+  output: ticket_log
+  values:
+    author: ${author}
+```
+
+`read` and `append` remain separate so collected data may also be checked, reused in later browser operations, or written to multiple outputs.
 
 ## 7. Readability principle
 
@@ -256,6 +308,7 @@ Fundamental rules:
 - page multiple matches: `AmbiguousPage`
 - a closed popup returns to its recorded parent window only when that relationship is known and the parent still exists
 - uncertain window recovery must fail rather than selecting an arbitrary remaining window
+- result output never bypasses credential/secret protection
 
 `first match wins` is not a default strategy.
 
@@ -272,6 +325,8 @@ Instead:
 3. wrap it with `if`, `for_each`, `repeat`, or `while`
 4. configure the structure in the Scenario Editor
 
+Data collection is similarly explicit: normal browsing does not cause arbitrary visible text to be scraped automatically. `read`/`append` steps are deliberately added where the user wants result data.
+
 ## 11. Browser context philosophy
 
 A scenario may move through substantially different URLs/DOMs and may open additional tabs/windows.
@@ -285,7 +340,7 @@ A scenario may move through substantially different URLs/DOMs and may open addit
 
 ## 12. Initial non-goals
 
-The initial DSL should not become a general-purpose programming language.
+The initial DSL should not become a general-purpose programming language or full scraping framework.
 
 The current direction excludes or discourages:
 
@@ -296,5 +351,7 @@ The current direction excludes or discourages:
 - mandatory hand-writing of CSS/XPath definitions
 - storing full DOM snapshots in normal scenario files
 - native OS-dialog automation as if it were ordinary DOM automation
+- general-purpose data transformation/query languages inside scenario YAML
+- implicit bulk scraping of arbitrary page content
 
 These constraints should be revisited only through an explicit specification change.
