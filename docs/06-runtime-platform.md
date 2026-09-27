@@ -141,6 +141,8 @@ The implementation should therefore:
 
 - attempt convenient initial placement where supported
 - allow the user to move/resize both windows normally
+- remember/respect a user-established layout on later launches where practical
+- avoid forcing the automatic layout again on every startup once a usable user layout is known
 - avoid depending on exact coordinates for Recorder correctness
 - avoid OS-specific window embedding as a core requirement
 
@@ -169,6 +171,8 @@ Likely responsibilities include:
 - log/output locations
 - Recorder-related runtime settings
 - optional Recorder/browser window placement preferences
+- destructive-operation confirmation policy
+- playback observation-delay preferences
 
 Do not prematurely mix these values into scenario YAML unless they directly affect procedure semantics.
 
@@ -213,3 +217,25 @@ For the first implementation, prioritize ordinary DOM automation that is portabl
 The initial Recorder UI should assume the separate-window model described above rather than native browser embedding.
 
 Defer specialized native-OS automation until the browser/DOM recording and playback path is stable.
+
+## 16. Editor persistence and recovery
+
+User-authored scenario and registry files use explicit saves rather than unconditional background overwrite.
+
+FlowTape may maintain private temporary recovery data to reduce data loss after an application crash. Recovery data must be clearly separate from the authoritative user files and must not silently replace them.
+
+On startup after an abnormal termination, the application may offer recovery when a newer recoverable editor state exists.
+
+## 17. External file change detection
+
+Because scenario and registry files are intentionally external and editable, the desktop application should monitor or otherwise detect external modifications while files are open.
+
+If an external change conflicts with unsaved GUI edits, FlowTape must ask the user how to proceed rather than silently discarding either side.
+
+The exact reconciliation UI may evolve, but silent overwrite is not acceptable.
+
+## 18. Initial appearance policy
+
+The initial UI may rely on Qt/platform-default appearance and controls. Dedicated light/dark themes are not required for the first implementation.
+
+Accessibility and basic readability take priority over custom theming during the initial implementation.
