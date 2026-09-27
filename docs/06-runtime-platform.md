@@ -9,10 +9,11 @@ Primary deployment target:
 - Windows 11
 - Microsoft Edge
 - end user should not need to install Python
+- managed/corporate environments may have restricted network access and may reset user-profile/environment state at logoff
 
 Primary development/test environment may be Linux.
 
-FlowTape should therefore keep browser/DOM semantics portable and isolate OS-specific concerns.
+FlowTape should keep browser/DOM semantics portable and isolate OS-specific concerns.
 
 ## 2. Browser automation layer
 
@@ -20,15 +21,14 @@ The browser automation layer is Selenium.
 
 The expected browser target for actual use is Microsoft Edge.
 
-Linux development may use Microsoft Edge for Linux where practical so that browser-engine behavior remains close to the Windows deployment environment.
-
-DOM-based Selenium behavior should be treated as cross-platform wherever possible.
+Linux development may use Microsoft Edge for Linux where practical so browser-engine behavior stays close to Windows deployment.
 
 ## 3. Cross-platform design principle
 
-The following should remain OS-independent:
+The following should remain OS-independent where practical:
 
 - scenario semantics
+- page identification
 - target resolution
 - DOM locator generation
 - accessible-name/role logic
@@ -40,202 +40,335 @@ Platform-specific logic should be isolated, including:
 
 - executable paths
 - filesystem path conventions
-- browser/driver discovery
+- browser/driver startup
 - download directories
-- native file dialogs
+- native dialogs
 - OS-specific process handling
-- Windows-only native UI interaction, if later required
+- optional window placement
 
 ## 4. Packaging model
 
-The intended distribution model is:
+Intended distribution:
 
 ```text
 FlowTape executable
-    + external config
-    + external scenarios
-    + external elements definitions
-    + replaceable browser/driver-related files/settings
+    + external config.yaml
+    + external credentials.yaml
+    + external scenario packages
+    + externally managed WebDriver
+    + optional external persistent browser profile
+    + generated logs/results/downloads
 ```
 
-The Python application is expected to be packaged using PyInstaller or an equivalent packaging step so that Python itself is not a prerequisite on the end-user PC.
+The Python application is expected to be packaged with PyInstaller or equivalent so Python itself is not required on the end-user PC.
 
 ## 5. Externalized files
 
-Do not embed user-specific scenario data into the executable.
+Do not embed user-specific scenario/runtime data into the executable.
 
-The following are expected to remain external:
+Expected external data includes:
 
-- scenario YAML files
-- `elements.yaml` or equivalent DOM registry files
-- runtime configuration
-- environment-specific browser/driver settings
-- generated logs/results
+- scenario directories containing `scenario.yaml` + `elements.yaml`
+- `config.yaml`
+- `credentials.yaml`
+- WebDriver executable at an administrator/user-managed absolute path
+- optional Edge profile directory
+- generated logs/results/downloads
 
-This allows scenarios and environment settings to change without rebuilding the application.
+## 6. WebDriver policy
 
-## 6. WebDriver / browser-driver policy
+WebDriver is never automatically downloaded or provisioned by FlowTape.
 
-Driver-related configuration should be replaceable independently from the executable.
+The expected corporate environment may not provide a mechanism for automatic Selenium/WebDriver retrieval. Therefore:
 
-The implementation must not assume one hard-coded absolute driver path compiled into the package.
+- the user/administrator places `msedgedriver.exe` in an externally managed location
+- `config.yaml` contains the full absolute path
+- `driver.path` is required
+- relative driver paths are not accepted
+- FlowTape does not use Selenium Manager as a fallback
+- FlowTape does not silently search PATH or guess another driver
+- FlowTape does not require a `driver/` directory under its own installation directory
 
-The exact mechanism—explicit path, Selenium Manager, bundled-but-replaceable driver, or another strategy—will be selected during implementation testing.
+Example:
 
-Whichever method is chosen, environment-specific driver configuration belongs outside scenario logic.
+```yaml
+driver:
+  path: 'D:\CompanyTools\EdgeDriver\msedgedriver.exe'
+```
 
-## 7. Edge compatibility
+At browser startup FlowTape validates that the configured file exists and can be invoked. Missing/invalid paths fail before normal scenario execution with a driver-configuration diagnostic.
 
-A FlowTape scenario should not depend on the operating system when it only interacts with normal web DOM elements.
+If Edge/WebDriver versions are incompatible, FlowTape reports the problem; it does not attempt an automatic update/download.
 
-For example, these operations should behave equivalently in Linux Edge and Windows Edge when the page DOM is equivalent:
+## 7. Configuration file
 
-- click DOM button
-- enter text
-- select option
-- read DOM text/value
-- wait for element state
-- resolve by role/name/label/CSS/XPath
+`config.yaml` is the runtime/environment configuration file.
 
-OS-sensitive behavior must be identified separately rather than hidden inside normal DOM actions.
+Representative initial shape:
 
-## 8. Native browser/OS UI boundary
+```yaml
+version: 1
 
-Selenium controls web content, not every operating-system-native interface.
+browser:
+  type: edge
+  executable: null
+  profile_path: null
 
-Examples that may require separate treatment:
+driver:
+  path: 'D:\CompanyTools\EdgeDriver\msedgedriver.exe'
 
-- native file chooser dialogs
+credentials:
+  path: ./credentials.yaml
+
+timeouts:
+  default: 10
+  page_load: 30
+
+paths:
+  scenarios: ./scenarios
+  logs: ./logs
+  downloads: ./downloads
+
+loops:
+  max_iterations: 1000
+  timeout: 600
+
+recorder:
+  arrange_windows: true
+
+logging:
+  level: INFO
+```
+
+Relative paths other than `driver.path` are resolved relative to the directory containing `config.yaml` unless a more specific specification says otherwise.
+
+Runtime/environment settings should not be mixed into scenario YAML unless they directly change procedure semantics.
+
+## 8. Credentials file
+
+IDs and passwords are stored separately in plaintext `credentials.yaml`.
+
+Example:
+
+```yaml
+version: 1
+
+credentials:
+  社内システム:
+    username: user001
+    password: password123
+```
+
+The configuration selects its location:
+
+```yaml
+credentials:
+  path: ./credentials.yaml
+```
+
+This design is intentional for managed environments where environment variables and user-profile data may be reset at logoff.
+
+Security rules:
+
+- scenarios refer to credentials through the dedicated `credential` namespace
+- credential values are never written to normal logs/debug output/error text after expansion
+- GUI/diagnostic displays mask secret values
+- password recording must not serialize the entered plaintext into `scenario.yaml`
+- `credentials.yaml` is excluded from source control
+- a `credentials.example.yaml` placeholder may be committed
+
+Plaintext file storage means filesystem access to this file reveals the credentials. Protection is therefore delegated to placement, OS/file permissions, and corporate storage policy in v1.
+
+## 9. Browser profile and session policy
+
+FlowTape supports both temporary and persistent Selenium Edge profiles.
+
+```yaml
+browser:
+  profile_path: 'D:\FlowTapeData\edge-profile'
+```
+
+Rules:
+
+- if `profile_path` is omitted/null, FlowTape may use a temporary isolated profile
+- if supplied, FlowTape uses that dedicated persistent profile so cookies/session/SSO state can survive launches where the environment permits it
+- use of a dedicated FlowTape profile is preferred over sharing a user's ordinary interactive Edge profile
+- the profile path is runtime configuration, not scenario semantics
+
+## 10. Edge compatibility
+
+A scenario that interacts only with normal web DOM/browser primitives should not depend on the OS when the page behavior is equivalent.
+
+Expected portable operations include:
+
+- click/double-click
+- input/select/read
+- hover/key operations
+- DOM file upload
+- page-state waits/checks
+- JavaScript alert/confirm/prompt handling through Selenium
+- target resolution by semantic/CSS/XPath strategies
+- ordinary tab/window switching
+
+OS-sensitive behavior must remain explicit.
+
+## 11. Native browser/OS UI boundary
+
+Selenium controls web content and supported browser context, not every native OS interface.
+
+Examples outside ordinary DOM automation:
+
+- native file chooser UI
 - OS credential dialogs
 - external application windows
-- browser permission prompts outside normal page DOM
+- native browser permission UI not exposed through supported Selenium/browser mechanisms
 
-Do not model these as ordinary DOM targets unless they are actually represented in the page DOM and accessible through Selenium.
+`<input type="file">` is supported through the DOM without automating the native file chooser.
 
-## 9. Recorder windows
+## 12. Recorder windows
 
 Expected first implementation:
 
-- PySide6 desktop application window for FlowTape
+- PySide6 FlowTape application window
 - separate Selenium-controlled Edge/browser window
 
-The FlowTape window manages recording/editing state while the browser remains a real interactive browser operated by the user during recording and element selection.
+The browser should not be embedded into PySide6 for the initial implementation.
 
-The browser should not be embedded into the PySide6 application window for the initial implementation. Recorder and playback should operate against a real Selenium-controlled browser so that recording and execution share the same browser automation model.
+When practical FlowTape may arrange the windows side-by-side at startup. Window placement is a usability feature only and must not be required for correctness.
 
-When practical, FlowTape may automatically arrange the two windows side by side at Recorder startup. A typical arrangement is:
-
-```text
-+--------------------------------+------------------------+
-| Selenium-controlled browser    | FlowTape application   |
-|                                |                        |
-| target Web page                | scenario / structure   |
-| hover / picker / highlight     | properties / targets   |
-|                                |                        |
-+--------------------------------+------------------------+
-```
-
-Window placement and sizing are usability features, not scenario semantics. They must be isolated from browser/DOM logic and may vary by OS, desktop environment, available monitor geometry, or user preference.
-
-The implementation should therefore:
+The implementation should:
 
 - attempt convenient initial placement where supported
-- allow the user to move/resize both windows normally
-- remember/respect a user-established layout on later launches where practical
-- avoid forcing the automatic layout again on every startup once a usable user layout is known
-- avoid depending on exact coordinates for Recorder correctness
-- avoid OS-specific window embedding as a core requirement
+- allow normal user move/resize
+- remember/respect a user-established layout where practical
+- avoid forcing automatic placement every launch after a usable layout is known
+- never identify page elements by desktop coordinates
 
-## 10. Injected JavaScript
+## 13. Injected JavaScript
 
-The Recorder may inject JavaScript into the current page through Selenium in order to:
+Recorder JavaScript may be injected through Selenium to:
 
-- observe user input/click events
-- identify DOM elements
-- collect metadata
-- highlight elements in picker/debug modes
+- observe input/click-related events
+- collect DOM metadata
+- identify elements
+- highlight picker/debug targets
 
-This JavaScript is part of the recording/inspection mechanism, not a replacement for Selenium playback.
+It remains recording/inspection infrastructure rather than a replacement playback engine.
 
-## 11. Configuration boundary
-
-The runtime configuration schema has not yet been finalized.
-
-Likely responsibilities include:
-
-- browser selection
-- browser executable path override
-- driver strategy/path override
-- default timeout values
-- scenario and registry locations
-- log/output locations
-- Recorder-related runtime settings
-- optional Recorder/browser window placement preferences
-- destructive-operation confirmation policy
-- playback observation-delay preferences
-
-Do not prematurely mix these values into scenario YAML unless they directly affect procedure semantics.
-
-## 12. Paths
-
-Use path abstractions that work on both Linux and Windows.
-
-Avoid assumptions such as:
-
-- `/home/...` always exists
-- drive letters always exist
-- path separator is always `/` or always `\\`
+## 14. Paths
 
 Use platform-neutral path handling in Python.
 
-## 13. Downloads and uploads
+Do not assume:
 
-Download directories and upload file paths are environment-sensitive and should be resolved through configuration/variables rather than hard-coded recording-machine absolute paths.
+- `/home/...` exists
+- Windows drive letters exist on all platforms
+- one path separator convention
 
-A recorded operation should not accidentally serialize a developer-machine path as a permanent portable scenario value unless the user explicitly chooses that behavior.
+The WebDriver path is the intentional exception to portable-relative-path defaults: it is required to be an absolute path configured by the operator.
 
-## 14. Logging and diagnostics
+## 15. Downloads
 
-Logs should make platform-sensitive failures distinguishable from target-resolution failures.
+The configured download directory is environment-specific.
 
-For example:
+Scenario steps should not accidentally serialize a developer-machine absolute download path.
+
+A normal click may start a download. Completion can be awaited through the DSL's `download_complete` wait condition.
+
+FlowTape should detect completion using the configured download directory and browser download behavior; temporary/in-progress files must not be treated as completed downloads.
+
+## 16. Uploads
+
+Upload paths may be supplied through normal scenario variables/configuration as appropriate.
+
+DOM `<input type="file">` is supported. Native file chooser automation is not required in v1.
+
+## 17. Browser windows/tabs
+
+Window/tab handles are managed through Selenium plus FlowTape's own parent relationship tracking.
+
+When an operation in A produces a new window B, FlowTape records B's parent as A when deterministically observable.
+
+If B closes automatically after its operation:
+
+- detect B's disappearance
+- return automatically to the known parent A if it still exists
+- re-identify the current page before continuing
+
+If B remains open, FlowTape stays on B until an explicit scenario context operation changes it.
+
+If the current window disappears and the correct parent/return target cannot be determined uniquely, FlowTape fails rather than selecting an arbitrary remaining window.
+
+This parent relation is a FlowTape runtime relation and must not depend solely on JavaScript `window.opener`.
+
+## 18. Scenario starting state
+
+A scenario may be self-starting or state-dependent.
+
+Self-starting example:
+
+```yaml
+- action: open
+  url: https://example.com
+```
+
+A scenario may also omit initial navigation and intentionally begin from the current browser state.
+
+For state-dependent starts, FlowTape identifies the current page before executing target-dependent operations. If the expected state cannot be established unambiguously, execution stops with diagnostics.
+
+This enables workflows such as playing a partially recorded scenario to its current end and handing control back to the user/Recorder for continuation.
+
+## 19. Logging and diagnostics
+
+Logs must distinguish categories such as:
 
 ```text
 TargetResolutionError
+UnknownPage
+AmbiguousPage
 BrowserStartupError
 DriverConfigurationError
+BrowserContextError
 NativeDialogUnsupportedError
 ScenarioValidationError
 ```
 
-Exact exception names are not yet fixed; the requirement is to preserve the distinction.
+Exact exception class names are implementation details, but diagnostic categories must remain distinct.
 
-## 15. Initial implementation priority
+Credentials/secrets must never be exposed in normal logs or diagnostics.
 
-For the first implementation, prioritize ordinary DOM automation that is portable between Linux development and Windows 11 Edge deployment.
+## 20. Initial implementation priority
 
-The initial Recorder UI should assume the separate-window model described above rather than native browser embedding.
+Prioritize ordinary browser/DOM automation portable between Linux development and Windows 11 Edge deployment.
 
-Defer specialized native-OS automation until the browser/DOM recording and playback path is stable.
+v1 includes:
 
-## 16. Editor persistence and recovery
+- normal DOM actions
+- page-scoped target resolution
+- checks/waits and download-completion waits
+- DOM file upload
+- keyboard and hover operations
+- limited Selenium-compatible drag/drop
+- JavaScript alert/confirm/prompt operations
+- new-tab/new-window workflows
+- popup auto-return to a known parent
 
-User-authored scenario and registry files use explicit saves rather than unconditional background overwrite.
+Defer specialized native-OS automation until the browser/DOM path is stable.
 
-FlowTape may maintain private temporary recovery data to reduce data loss after an application crash. Recovery data must be clearly separate from the authoritative user files and must not silently replace them.
+## 21. Editor persistence and recovery
 
-On startup after an abnormal termination, the application may offer recovery when a newer recoverable editor state exists.
+User-authored scenario/registry files use explicit saves rather than unconditional background overwrite.
 
-## 17. External file change detection
+FlowTape may maintain separate private recovery data after crashes, but recovery state must not silently replace authoritative files.
 
-Because scenario and registry files are intentionally external and editable, the desktop application should monitor or otherwise detect external modifications while files are open.
+## 22. External file change detection
 
-If an external change conflicts with unsaved GUI edits, FlowTape must ask the user how to proceed rather than silently discarding either side.
+Scenario and registry files are intentionally external/editable. FlowTape should detect external modifications while open.
 
-The exact reconciliation UI may evolve, but silent overwrite is not acceptable.
+If external changes conflict with unsaved GUI edits, the user must be given an explicit reconciliation choice. Silent overwrite is not acceptable.
 
-## 18. Initial appearance policy
+## 23. Initial appearance policy
 
-The initial UI may rely on Qt/platform-default appearance and controls. Dedicated light/dark themes are not required for the first implementation.
+The initial UI may rely on Qt/platform-default appearance and controls. Dedicated custom themes are not required for the first implementation.
 
-Accessibility and basic readability take priority over custom theming during the initial implementation.
+Accessibility and readability take priority over custom theming during the initial implementation.
