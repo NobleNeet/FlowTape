@@ -30,8 +30,11 @@ The current specifications are split as follows:
 - `docs/07-data-schema.md` — strict persisted schema for scenario, registry, config, credentials, outputs, and validation boundaries
 - `docs/08-recorder-protocol.md` — browser-side Recorder protocol, RawCaptureEvent normalization, IME/input, navigation capture, reinjection, and picker behavior
 - `docs/09-runtime-semantics.md` — Player execution semantics, resolver behavior, modes, waits, loops, outputs, retries, and playback control
+- `docs/10-implementation-clarifications.md` — final v1 clarifications for implementation-blocking ambiguities discovered during the pre-implementation audit
 
 When multiple documents touch the same subject, the more specific document governs its own layer. In particular, persisted field legality comes from `07-data-schema.md`, Recorder event behavior comes from `08-recorder-protocol.md`, and Player execution behavior comes from `09-runtime-semantics.md`.
+
+For subjects explicitly covered by `10-implementation-clarifications.md`, that document is the authoritative v1 clarification and takes precedence over broader or earlier wording in `02-yaml-dsl.md` through `09-runtime-semantics.md`. Do not reinterpret those clarified decisions locally in implementation code.
 
 If implementation and documentation disagree, do not silently reinterpret the specification. Either update the implementation to match the documented decision or explicitly update the specification as part of the same change.
 
