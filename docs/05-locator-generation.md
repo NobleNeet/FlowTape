@@ -742,7 +742,7 @@ Do not over-constrain incidental presentation details.
 
 ## 27. Fingerprint generation
 
-Optionally preserve a small diagnostic fingerprint, for example:
+Preserve a small diagnostic fingerprint when useful source information exists, for example:
 
 ```yaml
 fingerprint:
@@ -753,7 +753,7 @@ fingerprint:
     type: submit
 ```
 
-Fingerprint is supporting evidence for diagnostics/repair, not a license for fuzzy implicit clicking.
+Fingerprint is supporting evidence for diagnostics/repair, not a license for fuzzy implicit clicking. It must not be used to bypass the resolver's normal uniqueness and expectation rules.
 
 ## 28. Future observed-stability improvement
 
