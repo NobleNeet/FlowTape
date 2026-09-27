@@ -15,9 +15,9 @@ It covers:
 
 The intent is to make these formats precise enough that the Python parser, validator, serializer, editor model, recorder, and player do not need to invent missing schema rules independently.
 
-Runtime execution semantics such as exact action behavior in `実行` / `確認` / `デバッグ`, target fallback behavior, page-resolution behavior, waits, output file lifecycle, and retry behavior are defined separately in the runtime-semantics specification.
+Runtime execution semantics such as exact action behavior in `実行` / `確認` / `デバッグ`, target fallback behavior, page-resolution behavior, waits, output file lifecycle, collection-member tracking, and retry behavior are defined in `09-runtime-semantics.md`.
 
-Recorder browser-event transport and browser-side capture models are defined separately in the recorder-protocol specification.
+Recorder browser-event transport and browser-side capture models are defined in `08-recorder-protocol.md`.
 
 ## 2. General schema principles
 
@@ -27,7 +27,7 @@ FlowTape v1 uses strict persisted schemas.
 
 Unknown fields are validation errors unless a field is explicitly documented as an extension/free-form area.
 
-For example, this is invalid:
+Example invalid input:
 
 ```yaml
 - action: click
@@ -39,19 +39,27 @@ FlowTape must not silently ignore `timout` or reinterpret it as `timeout`.
 
 ### 2.2 Schema version is not application version
 
-Each persisted file has its own schema version.
+Each persisted file has its own schema version:
 
 ```yaml
 version: 1
 ```
 
-means version 1 of that file format. It is not the FlowTape application version.
+This means version 1 of that file format, not the FlowTape application version.
 
-Scenario, elements, config, and credentials schema versions may evolve independently.
+Scenario, elements, config, and credentials schemas may evolve independently.
 
 ### 2.3 Enum values are exact
 
 Enum values use exact spelling and case. FlowTape does not silently normalize unsupported variants.
+
+Examples:
+
+```yaml
+mode: 実行
+risk: 更新
+action: double_click
+```
 
 ### 2.4 Omission and `null`
 
@@ -60,13 +68,11 @@ For optional fields where no special `null` semantics are documented:
 - omitted field = use default / not configured
 - explicit `null` = not configured
 
-They are semantically equivalent.
-
 The serializer should normally omit optional `null` fields.
 
 ### 2.5 Ordered structures
 
-The following lists are semantically ordered and must preserve their persisted order:
+The following lists are semantically ordered and must preserve persisted order:
 
 - scenario `steps`
 - nested branch/loop `steps`
@@ -130,9 +136,13 @@ timeout: 1h
 
 Bare numbers are not accepted as durations in v1.
 
-## 5. Variable references
+Internally, the application may normalize durations to a standard Python duration representation.
 
-FlowTape supports interpolation references using:
+## 5. Variables and references
+
+### 5.1 Ordinary interpolation
+
+FlowTape supports interpolation using:
 
 ```text
 ${name}
@@ -146,25 +156,87 @@ value: "商品名: ${search_word}"
 url: "https://example.com/search?q=${search_word}"
 ```
 
-Credential references use the reserved namespace:
-
-```text
-${credential.社内システム.username}
-```
-
-Runtime loop/context values may also be referenced:
+Runtime loop/context values use the same reference form:
 
 ```text
 ${row}
 ```
 
-Variable-reference contents do not support arbitrary expressions, Python, function calls, or arithmetic.
+Variable references do not support arbitrary expressions, Python, function calls, or arithmetic.
+
+Invalid examples:
+
+```text
+${foo + 1}
+${len(items)}
+${python:...}
+```
+
+### 5.2 Variable identifier grammar
+
+The same ordinary variable-name grammar applies to:
+
+- top-level `variables` keys
+- `read.into`
+- `for_each.as`
+- other future ordinary runtime-variable declarations unless explicitly specified otherwise
+
+A v1 ordinary variable identifier:
+
+- is a non-empty Unicode identifier
+- may begin with `_` or a Unicode letter
+- subsequent characters may be `_`, Unicode letters, or Unicode decimal digits
+- may contain Japanese identifiers
+- may not contain whitespace
+- may not contain `.` `/` `-` `:` or interpolation punctuation such as `${` / `}`
+
+Examples valid in v1:
+
+```text
+search_word
+_ticket_id
+row2
+起票者
+チケット番号2
+```
+
+Examples invalid in v1:
+
+```text
+2row
+search-word
+foo.bar
+foo/bar
+foo bar
+```
+
+Implementations should validate this using Unicode-aware identifier semantics equivalent to Python-style identifiers rather than ASCII-only regular expressions.
+
+### 5.3 Reserved namespaces
+
+`credential` is a reserved root namespace and may not be declared as an ordinary scenario/runtime/loop variable name.
+
+Credential references use:
+
+```text
+${credential.<group>.<key>}
+```
+
+Example:
+
+```text
+${credential.社内システム.username}
+```
+
+Dots are meaningful only inside explicitly defined reserved namespaces such as `credential`; they are not allowed in ordinary variable identifiers.
+
+Namespace/collision behavior during execution is defined in `09-runtime-semantics.md`. In particular, scenario-declared variables must not be silently overwritten by a conflicting runtime/loop declaration.
 
 ## 6. `scenario.yaml`
 
 ### 6.1 Top-level schema
 
-A v1 scenario has this conceptual form:
+Conceptual form:
 
 ```yaml
 version: 1
@@ -197,7 +269,7 @@ Fields:
 | `name` | yes | non-empty string | none |
 | `description` | no | string | omitted |
 | `mode` | no | enum | `実行` |
-| `variables` | no | map<string, scalar> | empty |
+| `variables` | no | map<VariableName, scalar> | empty |
 | `outputs` | no | map<OutputName, OutputDefinition> | empty |
 | `steps` | yes | list<Node> | none |
 
@@ -209,9 +281,11 @@ Allowed `mode` values:
 デバッグ
 ```
 
+Recorder/Editor-generated files may explicitly persist `mode: 実行` even though it is the default.
+
 ### 6.2 Scenario variables
 
-Scenario-defined variables are limited to scalar values in v1.
+Scenario-defined variables are scalar-only in v1.
 
 Valid:
 
@@ -220,9 +294,26 @@ variables:
   search_word: RTX 5090
   retry_count: 3
   enabled: true
+  検索語: GPU
 ```
 
-Nested arrays/maps are not allowed as scenario variables in v1.
+Invalid nested values:
+
+```yaml
+variables:
+  users:
+    - A
+    - B
+```
+
+```yaml
+variables:
+  account:
+    name: A
+    id: 1
+```
+
+Collection/value iteration may be added in a future schema without changing the v1 DOM-collection model.
 
 ## 7. Scenario outputs
 
@@ -230,13 +321,13 @@ Nested arrays/maps are not allowed as scenario variables in v1.
 
 Scenario outputs are user-requested execution artifacts used to collect small amounts of structured or textual data during browser automation.
 
-They are distinct from FlowTape diagnostic/system logs.
+They are distinct from FlowTape diagnostic/system logs and browser downloads.
 
 ### 7.2 Output names
 
 Output names are non-empty UTF-8 strings unique within one scenario.
 
-An `append` action refers to an output by this logical name.
+An `append` action refers to an output by logical name.
 
 ### 7.3 OutputDefinition union
 
@@ -248,7 +339,7 @@ JsonlOutputDefinition
 TextOutputDefinition
 ```
 
-The `format` field is the discriminator.
+`format` is the discriminator.
 
 Supported values:
 
@@ -263,7 +354,7 @@ All output definitions require:
 - `format`
 - `file`: non-empty relative path string
 
-All output definitions may contain:
+Optional:
 
 - `existing`: enum, default `new`
 
@@ -275,13 +366,11 @@ append
 overwrite
 ```
 
-Absolute paths are invalid in scenario output definitions. Environment-specific output roots belong in `config.yaml`.
+Absolute paths are invalid in scenario output definitions.
 
 Path traversal outside the configured output root (for example `../...`) is invalid.
 
 ### 7.4 CSV output
-
-Example:
 
 ```yaml
 outputs:
@@ -304,13 +393,9 @@ Fields:
 | `existing` | no | enum |
 | `columns` | yes | non-empty ordered list<non-empty string> |
 
-Column names must be unique.
-
-The ordered list controls CSV column order.
+Column names must be unique. Column order is semantically significant.
 
 ### 7.5 JSON Lines output
-
-Example:
 
 ```yaml
 outputs:
@@ -320,21 +405,9 @@ outputs:
     existing: new
 ```
 
-Fields:
-
-| Field | Required | Type |
-|---|---|---|
-| `format` | yes | literal `jsonl` |
-| `file` | yes | relative path string |
-| `existing` | no | enum |
-
-JSON Lines does not require a fixed column declaration in v1.
-
-Each successful structured `append` writes one JSON object record.
+JSON Lines does not require a fixed column declaration in v1. Each successful structured `append` writes one object record.
 
 ### 7.6 Text output
-
-Example:
 
 ```yaml
 outputs:
@@ -344,25 +417,15 @@ outputs:
     existing: new
 ```
 
-Fields:
-
-| Field | Required | Type |
-|---|---|---|
-| `format` | yes | literal `text` |
-| `file` | yes | relative path string |
-| `existing` | no | enum |
-
 Each successful text `append` writes one textual line.
 
-### 7.7 Output lifecycle policy
+### 7.7 Output lifecycle schema meaning
 
-Schema meanings:
-
-- `new`: use a new non-colliding result location/path for the run; previous results are not overwritten
+- `new`: use a new non-colliding run/result location; previous results are not overwritten
 - `append`: append to the selected existing output
 - `overwrite`: replace the output at run initialization
 
-The exact run-directory and filename-generation convention is runtime semantics, not schema.
+Exact runtime path/run-directory semantics are defined in `09-runtime-semantics.md`.
 
 ## 8. Scenario nodes
 
@@ -380,6 +443,17 @@ ForEachNode
 
 A node may not declare multiple node kinds simultaneously.
 
+Invalid:
+
+```yaml
+- action: click
+  target: 保存
+  while:
+    exists: 次へ
+```
+
+There is no persisted `GroupNode` in schema v1.
+
 ### 8.2 Common node fields
 
 All node types may contain:
@@ -390,8 +464,6 @@ description: 任意の説明
 _meta:
   id: 01K...
 ```
-
-Common fields:
 
 | Field | Required | Type | Default |
 |---|---|---|---|
@@ -412,19 +484,17 @@ _meta:
   id: 01K6QZX...
 ```
 
-Hand-written YAML may omit `_meta.id`.
+Visible step numbers are presentation-only.
 
-When loaded, FlowTape creates an in-memory ULID and persists it when the scenario is later saved through the editor.
+Hand-written YAML may omit `_meta.id`. FlowTape creates an in-memory ULID and persists it when later saved through the editor.
 
-`_meta` is reserved for explicitly specified FlowTape bookkeeping only. Raw DOM snapshots, coordinates, scores, and rejected candidates do not belong there.
+`_meta` is strict. Its v1 defined field is `id`; unknown fields are invalid until explicitly specified.
+
+Verbose recorder diagnostics, raw DOM snapshots, coordinates, candidate scores, and rejected candidates do not belong in `_meta`.
 
 ## 10. Action nodes
 
-### 10.1 Action discriminator
-
-Action nodes use `action` as a discriminator.
-
-Supported v1 actions are:
+### 10.1 Supported v1 actions
 
 ```text
 open
@@ -450,19 +520,17 @@ switch_window
 close_window
 ```
 
-Each action accepts only fields defined for that action plus common node fields and optional risk metadata where applicable.
+Each action accepts only its defined action-specific fields plus common node fields and optional `risk` metadata.
 
-### 10.2 Navigation actions
+### 10.2 Navigation
 
-`open` requires:
-
-- `url`: non-empty interpolatable string
+`open` requires `url`: non-empty interpolatable string.
 
 `back`, `forward`, and `refresh` have no action-specific required fields.
 
-### 10.3 Click actions
+### 10.3 Click / double click
 
-`click` and `double_click` require:
+Required:
 
 - `target`: non-empty string
 
@@ -470,31 +538,27 @@ Optional:
 
 - `within`: runtime context reference string
 
-### 10.4 Input action
+### 10.4 Input
 
 Required:
 
 - `target`
 - `value`: interpolatable scalar/string value
 
-Optional:
+Optional `within`.
 
-- `within`
-
-### 10.5 Select action
+### 10.5 Select
 
 Required:
 
 - `target`
 - `value`
 
-Optional:
+Optional `within`.
 
-- `within`
+### 10.6 Read
 
-### 10.6 Read action
-
-Supported `source` forms:
+Supported source forms:
 
 ```yaml
 source: text
@@ -513,17 +577,13 @@ Required:
 
 - `target`
 - `source`
-- `into`: non-empty runtime-variable name
+- `into`: VariableName
 
-Optional:
+Optional `within`.
 
-- `within`
+`read` stores a runtime value only; it does not write an output itself.
 
-`read` stores a runtime value only; it does not itself write to an output.
-
-### 10.7 Append action
-
-`append` has two schema forms according to the referenced output format.
+### 10.7 Append
 
 Structured form for CSV/JSONL:
 
@@ -535,11 +595,6 @@ Structured form for CSV/JSONL:
     author: ${author}
 ```
 
-Required:
-
-- `output`: non-empty output name
-- `values`: non-empty map<string, interpolatable scalar>
-
 Text form:
 
 ```yaml
@@ -548,36 +603,30 @@ Text form:
   value: "${id}: ${author}"
 ```
 
-Required:
-
-- `output`
-- `value`: interpolatable scalar/string
-
 Rules:
 
-- exactly one of `values` or `value` is allowed
-- referenced output must exist in top-level `outputs`
+- `output` required
+- exactly one of `values` or `value`
 - CSV/JSONL require `values`
 - text requires `value`
-- for CSV, `values` keys must exactly match the declared `columns` set; the file column order still follows `columns`
-- credential namespace references are forbidden anywhere inside `append.value` or `append.values`
+- `values` is non-empty map<string, interpolatable scalar>
+- for CSV, keys must exactly match declared `columns`; output order follows `columns`
+- credential namespace references are forbidden anywhere inside append data
 
-`append` is externally observable and may produce duplicate records if re-executed. v1 defines no implicit deduplication/upsert schema.
+`append` may duplicate records if explicitly re-executed; v1 defines no implicit dedup/upsert.
 
-### 10.8 Upload action
+### 10.8 Upload
 
 Required:
 
 - `target`
 - `path`: interpolatable string
 
-Optional:
+Optional `within`.
 
-- `within`
+### 10.9 Key
 
-### 10.9 Key action
-
-A key action provides exactly one of:
+Provide exactly one of:
 
 ```yaml
 key: ENTER
@@ -593,19 +642,13 @@ keys:
 
 `target` is optional. `within` is allowed only when `target` is present.
 
-### 10.10 Hover action
+### 10.10 Hover
 
-Required:
+Requires `target`; optional `within`.
 
-- `target`
+### 10.11 Drag and drop
 
-Optional:
-
-- `within`
-
-### 10.11 Drag-and-drop action
-
-Required:
+Requires:
 
 - `from`: logical target name
 - `to`: logical target name
@@ -616,21 +659,15 @@ Required:
 
 `alert_accept` and `alert_dismiss` have no action-specific fields.
 
-### 10.13 Wait action
+### 10.13 Wait
 
-Required:
+Requires `until`: WaitCondition.
 
-- `until`: WaitCondition
+Optional `timeout`: duration string.
 
-Optional:
+### 10.14 Check
 
-- `timeout`: duration string
-
-### 10.14 Check action
-
-Required:
-
-- `condition`: Condition
+Requires `condition`: Condition.
 
 ### 10.15 Window actions
 
@@ -659,7 +696,7 @@ Allowed values:
 破壊的
 ```
 
-`risk` is metadata in schema v1.
+`risk` is metadata in schema v1. Omission means no explicit risk classification was persisted; it is not schema-equivalent to writing `安全`.
 
 ## 12. Conditions
 
@@ -692,15 +729,13 @@ Value/text conditions require `target` and `value`.
 
 ## 13. Wait conditions
 
-`wait.until` accepts ordinary conditions plus wait-specific conditions.
-
-The v1 wait-specific condition is:
+`wait.until` accepts ordinary conditions plus:
 
 ```yaml
 download_complete: "*.csv"
 ```
 
-The exact completion semantics are defined in runtime semantics.
+Exact completion behavior belongs to runtime semantics.
 
 ## 14. Structural nodes
 
@@ -711,9 +746,7 @@ Required:
 - `if`: Condition
 - `then`: list<Node>
 
-Optional:
-
-- `else`: list<Node>
+Optional `else`: list<Node>.
 
 ### 14.2 RepeatNode
 
@@ -731,27 +764,31 @@ A WhileNode combines:
 - optional `timeout`: duration
 - required `steps`: list<Node>
 
-Loop limits omitted from the node use configuration defaults.
+The condition operator is written directly inside `while` rather than under an additional `condition` key.
+
+Omitted limits use config defaults.
 
 ### 14.4 ForEachNode
 
 Required inside `for_each`:
 
 - `target`: collection name
-- `as`: runtime variable name
+- `as`: VariableName
 - `steps`: list<Node>
 
-The referenced target must resolve to a collection definition, not a normal single-element target.
+The target must refer to a collection definition, not an ordinary single element.
+
+Runtime MemberSnapshot/re-identification semantics are defined in `09-runtime-semantics.md` and are not persisted in the scenario.
 
 ## 15. `within`
 
-`within` narrows resolution to a runtime context, for example:
+`within` narrows target resolution to a runtime context such as:
 
 ```yaml
 within: ${row}
 ```
 
-It is not a place for raw CSS/XPath selectors.
+It is an interpolatable runtime-context reference, not a place for raw CSS/XPath.
 
 ## 16. `elements.yaml`
 
@@ -769,9 +806,9 @@ Fields:
 | `version` | yes | integer literal `1` |
 | `pages` | yes | map<PageId, PageDefinition> |
 
-Page IDs are non-empty UTF-8 strings. Japanese IDs are allowed. `/` and `.` have no implicit hierarchy semantics.
+Page IDs are non-empty UTF-8 strings. Japanese IDs are allowed. Characters such as `/` or `.` do not implicitly define hierarchy.
 
-## 17. PageDefinition
+## 17. PageDefinition and page identification
 
 A page definition supports:
 
@@ -781,19 +818,9 @@ elements: ...
 collections: ...
 ```
 
-Fields:
+`identify` is required. `elements` and `collections` are optional maps.
 
-| Field | Required | Type | Default |
-|---|---|---|---|
-| `identify` | yes | PageCondition | none |
-| `elements` | no | map<TargetName, ElementDefinition> | empty |
-| `collections` | no | map<CollectionName, CollectionDefinition> | empty |
-
-Single-element targets and collections are intentionally separate because their resolution cardinality differs.
-
-## 18. Page identification schema
-
-Supported v1 PageCondition operators:
+PageCondition is exactly one of:
 
 ```text
 url
@@ -803,23 +830,61 @@ any
 not
 ```
 
-A PageCondition uses exactly one operator.
+URL condition uses exactly one of:
 
-A URL condition uses exactly one of:
-
-```text
-equals
-contains
-starts_with
+```yaml
+url:
+  equals: https://example.com/login
 ```
 
-Regular expressions are not part of v1.
+```yaml
+url:
+  contains: /login
+```
 
-DOM existence checks use a SemanticSelector.
+```yaml
+url:
+  starts_with: https://example.com/orders/
+```
 
-## 19. ElementDefinition
+Regex is not part of v1.
 
-Conceptual fields:
+DOM `exists` page evidence uses a SemanticSelector with supported fields:
+
+```text
+role
+name
+text
+label
+testid
+id
+```
+
+At least one field is required.
+
+Exact page-match semantics are defined in `09-runtime-semantics.md`.
+
+## 18. ElementDefinition
+
+Conceptual schema:
+
+```yaml
+kind: button
+context:
+  - frame:
+      id: payment-frame
+locate:
+  - by: role
+    role: button
+    name: 保存
+expect:
+  role: button
+  enabled: true
+fingerprint:
+  text: 保存
+```
+
+Fields:
 
 | Field | Required | Type |
 |---|---|---|
@@ -829,7 +894,7 @@ Conceptual fields:
 | `expect` | no | Expectation |
 | `fingerprint` | no | Fingerprint |
 
-Allowed v1 `kind` values:
+Allowed v1 kinds:
 
 ```text
 button
@@ -845,7 +910,7 @@ file
 element
 ```
 
-## 20. Locator union
+## 19. Locator union
 
 Supported `by` values:
 
@@ -863,9 +928,9 @@ css
 xpath
 ```
 
-`by` is the discriminator.
+`by` is the discriminator. A locator accepts only fields valid for its family plus common fields.
 
-Common optional fields include:
+Common optional fields:
 
 ```yaml
 fragile: true
@@ -874,17 +939,54 @@ index: 3
 
 If `index` is present, `fragile: true` is required.
 
-Simple locator families require `value` where appropriate.
+v1 runtime convention is **zero-based index** (`index: 0` means the first matched element). Implementations must not use one-based indexing.
 
-Role locators require `role` and may contain `name`.
+Simple `testid`/`id`/`name`/`label`/`placeholder` locators require `value`.
 
-Text locators may contain `exact`, default `true`.
+Role locator:
 
-Attribute locators require `name` and `value`.
+```yaml
+- by: role
+  role: button
+  name: 保存
+```
 
-Relative locators require `anchor`, `relation`, and `target`.
+`role` required; `name` optional.
 
-Supported initial relative relations:
+Text locator:
+
+```yaml
+- by: text
+  value: 注文を確定
+  exact: true
+```
+
+`value` required; `exact` defaults to true.
+
+Attribute locator requires `name` + `value`.
+
+CSS/XPath locators require `value`.
+
+Relative locator:
+
+```yaml
+- by: relative
+  anchor:
+    role: heading
+    name: プロフィール
+  relation: section
+  target:
+    role: button
+    name: 保存
+```
+
+Required:
+
+- `anchor`: SemanticSelector
+- `relation`
+- `target`: SemanticSelector
+
+Initial relations:
 
 ```text
 descendant
@@ -895,9 +997,9 @@ section
 nearby
 ```
 
-## 21. SemanticSelector
+## 20. SemanticSelector
 
-Supported v1 fields include:
+Supported fields:
 
 ```text
 role
@@ -908,13 +1010,27 @@ testid
 id
 ```
 
-At least one field is required.
+At least one is required. Unknown selector fields are invalid.
 
-Unknown selector fields are invalid.
+Exact accessible-name/role semantics are shared with `08-recorder-protocol.md` / `09-runtime-semantics.md`.
 
-## 22. Expectation schema
+## 21. Expectation schema
 
-Supported v1 fields:
+Supported fields:
+
+```yaml
+expect:
+  tag: input
+  role: textbox
+  input_type: email
+  visible: true
+  enabled: true
+  editable: true
+  attributes:
+    autocomplete: email
+```
+
+Allowed:
 
 - `tag`: string
 - `role`: string
@@ -922,26 +1038,47 @@ Supported v1 fields:
 - `visible`: boolean
 - `enabled`: boolean
 - `editable`: boolean
-- `attributes`: map<string, string>
+- `attributes`: map<string,string>
 
 Expectations should remain minimal and meaningful.
 
-## 23. Traversal context
+## 22. Traversal context
 
-`context` is an ordered list of exactly one of:
+`context` is ordered.
 
-```text
-FrameContext
-ShadowContext
+Example:
+
+```yaml
+context:
+  - frame:
+      id: payment-frame
+  - shadow:
+      css: app-shell
+  - shadow:
+      css: payment-panel
 ```
 
-Mixed sequences such as frame -> shadow -> frame are valid where supported.
+Each step is exactly one of FrameContext or ShadowContext.
 
-A context step must not contain both `frame` and `shadow`.
+Mixed sequences such as frame -> shadow -> frame are valid where runtime support permits.
 
-## 24. CollectionDefinition
+A context step must not contain both `frame` and `shadow` simultaneously.
 
-Collections are stored separately from `elements`.
+## 23. CollectionDefinition
+
+Collections are stored separately from `elements` because they intentionally resolve multiple members.
+
+Example:
+
+```yaml
+pages:
+  orders:
+    collections:
+      注文一覧/行:
+        locate:
+          - by: role
+            role: row
+```
 
 Conceptual fields:
 
@@ -952,11 +1089,11 @@ Conceptual fields:
 | `expect` | no | CollectionExpectation |
 | `fingerprint` | no | Fingerprint |
 
-Collection locators intentionally resolve multiple members.
+An ordinary `elements` definition must not be used as a `for_each` collection merely because its locator matches multiple nodes.
 
-## 25. Fingerprint schema
+## 24. Fingerprint schema
 
-Supported v1 shape:
+Fingerprint is diagnostic metadata, not a fuzzy alternate locator.
 
 ```yaml
 fingerprint:
@@ -971,11 +1108,11 @@ Fields:
 
 - `text`: optional string
 - `nearby_text`: optional list<string>
-- `attributes`: optional map<string, string>
+- `attributes`: optional map<string,string>
 
-Full DOM HTML, full ancestor chains, coordinates, and score tables must not be persisted as fingerprints.
+Full DOM HTML, full ancestor chains, coordinates, and score tables are not persisted here.
 
-## 26. `config.yaml`
+## 25. `config.yaml`
 
 Recommended v1 configuration:
 
@@ -988,7 +1125,7 @@ browser:
   profile_path: null
 
 driver:
-  path: 'D:\CompanyTools\EdgeDriver\msedgedriver.exe'
+  path: 'D:\\CompanyTools\\EdgeDriver\\msedgedriver.exe'
 
 credentials:
   path: ./credentials.yaml
@@ -1017,55 +1154,19 @@ logging:
   level: INFO
 ```
 
-### 26.1 Browser config
+`browser.type` supports only `edge` in v1.
 
-`browser.type` v1 supports only `edge`.
+`driver.path` is required and must be absolute. FlowTape does not fall back to Selenium Manager or PATH discovery.
 
-`executable` and `profile_path` are optional path strings.
+Relative paths other than `driver.path` resolve relative to the config directory.
 
-### 26.2 Driver config
+`timeouts` and loop/playback durations use the explicit duration-string format.
 
-`driver.path` is required and must be an absolute filesystem path.
-
-FlowTape does not fall back to Selenium Manager or PATH discovery.
-
-### 26.3 Credentials config
-
-`credentials.path` may be relative to the directory containing `config.yaml`.
-
-### 26.4 Timeout config
-
-`timeouts.default` and `timeouts.page_load` use the duration format defined here.
-
-### 26.5 Runtime paths
-
-```yaml
-paths:
-  scenarios: ./scenarios
-  logs: ./logs
-  downloads: ./downloads
-  outputs: ./outputs
-```
-
-Relative paths are resolved relative to the directory containing `config.yaml` unless another specification explicitly states otherwise.
-
-`outputs` is the root for declared scenario result artifacts. Scenario output definitions may not escape this root.
-
-### 26.6 Loop defaults
-
-`max_iterations` is a positive integer. `timeout` is a duration.
-
-### 26.7 Recorder config
+`loops.max_iterations` is positive integer.
 
 `recorder.arrange_windows` is boolean.
 
-### 26.8 Playback config
-
-`playback.observation_delay` is a duration used for observation pacing. It does not replace Selenium waits.
-
-### 26.9 Logging config
-
-Allowed v1 levels:
+`logging.level` supports:
 
 ```text
 DEBUG
@@ -1075,9 +1176,11 @@ ERROR
 CRITICAL
 ```
 
-## 27. `credentials.yaml`
+`playback.observation_delay` controls slow/observation pacing and does not replace Selenium waits.
 
-Top-level shape:
+## 26. `credentials.yaml`
+
+Top-level:
 
 ```yaml
 version: 1
@@ -1085,16 +1188,12 @@ credentials:
   社内システム:
     username: user001
     password: password123
+    domain: CORP
 ```
 
-Fields:
+`credentials` is required map<CredentialGroupName, CredentialEntry>.
 
-| Field | Required | Type |
-|---|---|---|
-| `version` | yes | integer literal `1` |
-| `credentials` | yes | map<CredentialGroupName, CredentialEntry> |
-
-A credential entry intentionally allows arbitrary non-empty string keys. Every credential value must be a string.
+Each CredentialEntry intentionally allows arbitrary non-empty string keys because systems differ, but every value must be a string.
 
 Credential references use:
 
@@ -1102,102 +1201,92 @@ Credential references use:
 ${credential.<group>.<key>}
 ```
 
-Credential values must never be exposed in normal logs, diagnostics, exception strings, persisted expanded scenario content, or scenario output artifacts.
+Missing group/key references are validation/runtime errors according to stage.
 
-## 28. Serializer normalization
+Credential values must never appear in normal logs, diagnostics, exception strings, expanded persisted scenario content, or result outputs.
 
-FlowTape-generated YAML should follow a stable canonical presentation.
+## 27. Serializer normalization
 
-Recommended v1 serializer rules:
+FlowTape-generated YAML should use stable canonical presentation:
 
 - UTF-8
 - two-space indentation
-- no mandatory `---` marker
+- no mandatory `---`
 - preserve step order
-- preserve output column order
 - preserve locator order
 - preserve context traversal order
-- emit Japanese text directly
-- omit optional `null` fields
+- preserve output column order
+- emit Japanese directly
+- omit optional nulls
+- omit defaults where readability does not benefit
 - normally omit `enabled: true`
 - preserve `_meta.id`
-- avoid sorting semantic ordered lists
-- use a stable documented field order within generated objects
+- stable field order
 
-## 29. Validation layers
+Re-saving manually authored harmless formatting may canonicalize formatting but must preserve semantic meaning.
 
-### 29.1 Schema validation
+## 28. Validation layers
+
+### 28.1 Schema validation
 
 Examples:
 
 - required field missing
-- unknown field present
-- wrong scalar/list/map type
+- unknown field
+- wrong type
 - unsupported enum
 - invalid duration syntax
+- invalid VariableName syntax
+- reserved `credential` used as ordinary variable
 - invalid action-specific field
 - multiple Condition operators
 - `index` without `fragile: true`
-- absolute or escaping scenario output path
-- duplicate CSV output column
-- `append` containing both `value` and `values`
+- absolute/path-traversing scenario output path
+- malformed OutputDefinition
 
-### 29.2 Cross-file/static semantic validation
+### 28.2 Cross-file/static semantic validation
 
 Examples:
 
-- malformed credential reference
-- known collection reference points to a single target
+- malformed/missing credential reference syntax
+- ordinary variable namespace collision determinable statically
+- collection reference points to a single-target definition
 - obvious action/target-kind incompatibility
-- `append.output` references an undeclared output
-- CSV `append.values` keys do not match declared columns
-- text output uses `values`
-- structured output uses `value`
-- any credential reference appears in an `append` payload
+- invalid page ID reference where determinable
+- `append` references missing output
+- CSV append key set differs from declared columns
+- credential namespace used in output data
 
-### 29.3 Runtime/live validation
+### 28.3 Runtime/live validation
 
 Examples:
 
-- current page cannot be identified
-- target resolves to zero/multiple acceptable elements
-- live DOM no longer matches expectation
-- output file cannot be created/opened/written
-- an existing-file policy cannot be satisfied
+- current page unknown/ambiguous
+- target zero/multiple acceptable matches
+- live DOM expectation mismatch
+- context traversal failure
+- collection-member disappearance/ambiguity
+- output write/header/lifecycle failure
+- state-dependent scenario starts from unknown state
 
-Runtime rules are specified separately.
+Runtime rules are specified in `09-runtime-semantics.md`.
 
-## 30. Output data and diagnostics separation
+## 29. Reserved future evolution
 
-Values read from page DOM are not automatically copied into FlowTape diagnostic logs.
+FlowTape v1 does not interpret unknown keys as future extensions.
 
-Normal diagnostics should be able to state that `read` or `append` succeeded without including the extracted business/user data itself.
+New persisted capabilities require either:
 
-Declared outputs are the explicit destination for such collected data.
+1. an explicitly documented backward-compatible field addition, or
+2. a schema-version increment with documented migration/compatibility behavior.
 
-This separation does not make arbitrary collected page data secret, but it prevents diagnostics from unintentionally becoming a duplicate data-export channel.
+Old implementations must not silently accept data whose meaning they do not understand.
 
-## 31. Authoring boundary for read/output actions
+## 30. Implementation guidance
 
-A `read` step is an explicit scenario-authoring intent. It is not inferred merely because the user visually inspected a page.
+Persisted types should be modeled explicitly rather than passed through as unvalidated dictionaries.
 
-The editor should create `read` through an explicit flow using the browser picker to bind the DOM target and then choose `text`, `value`, or an attribute source.
-
-Similarly, `append` is created explicitly by selecting or creating an output and mapping runtime values to its record fields.
-
-These authoring clicks are picker/editor operations and are not normal recorded browser-operation steps.
-
-## 32. Reserved future evolution
-
-FlowTape v1 does not interpret arbitrary unknown keys as future extensions.
-
-New persisted capabilities require either an explicitly documented backward-compatible field or a schema-version increment with migration/compatibility rules.
-
-General-purpose scraping transforms, aggregate/group-by expressions, implicit database behavior, and arbitrary expression evaluation are not part of schema v1.
-
-## 33. Implementation guidance
-
-The Python implementation should model persisted types explicitly rather than passing unvalidated dictionaries through application layers.
+Pydantic, dataclasses plus validators, or equivalent are acceptable provided observable validation follows this specification.
 
 Recommended conceptual model families include:
 
@@ -1218,4 +1307,4 @@ ConfigDocument
 CredentialsDocument
 ```
 
-Parser, editor, recorder, and player should operate on validated domain models instead of independently interpreting raw YAML maps.
+Parser, editor, recorder, and player should operate on validated domain models rather than independently interpreting raw YAML maps.
