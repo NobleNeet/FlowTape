@@ -119,7 +119,30 @@ Expected first implementation:
 - PySide6 desktop application window for FlowTape
 - separate Selenium-controlled Edge/browser window
 
-The FlowTape window manages recording/editing state while the browser remains a real interactive browser operated by the user during recording.
+The FlowTape window manages recording/editing state while the browser remains a real interactive browser operated by the user during recording and element selection.
+
+The browser should not be embedded into the PySide6 application window for the initial implementation. Recorder and playback should operate against a real Selenium-controlled browser so that recording and execution share the same browser automation model.
+
+When practical, FlowTape may automatically arrange the two windows side by side at Recorder startup. A typical arrangement is:
+
+```text
++--------------------------------+------------------------+
+| Selenium-controlled browser    | FlowTape application   |
+|                                |                        |
+| target Web page                | scenario / structure   |
+| hover / picker / highlight     | properties / targets   |
+|                                |                        |
++--------------------------------+------------------------+
+```
+
+Window placement and sizing are usability features, not scenario semantics. They must be isolated from browser/DOM logic and may vary by OS, desktop environment, available monitor geometry, or user preference.
+
+The implementation should therefore:
+
+- attempt convenient initial placement where supported
+- allow the user to move/resize both windows normally
+- avoid depending on exact coordinates for Recorder correctness
+- avoid OS-specific window embedding as a core requirement
 
 ## 10. Injected JavaScript
 
@@ -145,6 +168,7 @@ Likely responsibilities include:
 - scenario and registry locations
 - log/output locations
 - Recorder-related runtime settings
+- optional Recorder/browser window placement preferences
 
 Do not prematurely mix these values into scenario YAML unless they directly affect procedure semantics.
 
@@ -185,5 +209,7 @@ Exact exception names are not yet fixed; the requirement is to preserve the dist
 ## 15. Initial implementation priority
 
 For the first implementation, prioritize ordinary DOM automation that is portable between Linux development and Windows 11 Edge deployment.
+
+The initial Recorder UI should assume the separate-window model described above rather than native browser embedding.
 
 Defer specialized native-OS automation until the browser/DOM recording and playback path is stable.
