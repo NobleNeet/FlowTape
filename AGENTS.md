@@ -33,12 +33,15 @@ The current specifications are split as follows:
 - `docs/10-implementation-clarifications.md` — final v1 clarifications for implementation-blocking ambiguities discovered during the pre-implementation audit
 - `docs/11-development-environment.md` — development VM, permission boundary, dependency installation, browser/test-site usage, and external side-effect restrictions
 - `docs/12-application-scenario-lifecycle.md` — neutral application startup, scenario creation/open/close, browser lifetime, configuration, and recent scenarios
+- `docs/13-credential-and-authoring-ux.md` — desktop onboarding, scenario package selection/creation UX, shared credential-store model, and Recorder credential selection/registration
 
 When multiple documents touch the same subject, the more specific document governs its own layer. In particular, persisted field legality comes from `07-data-schema.md`, Recorder event behavior comes from `08-recorder-protocol.md`, and Player execution behavior comes from `09-runtime-semantics.md`.
 
 For subjects explicitly covered by `10-implementation-clarifications.md`, that document is the authoritative v1 clarification and takes precedence over broader or earlier wording in `02-yaml-dsl.md` through `09-runtime-semantics.md`. Do not reinterpret those clarified decisions locally in implementation code.
 
 For application startup and scenario/browser lifetime, `12-application-scenario-lifecycle.md` takes precedence over older assumptions that the GUI requires an existing scenario package. Recorder/Player semantics remain governed by their existing layer specifications.
+
+For desktop onboarding, New/Open package-selection UX, application-level credential-store ownership, and Recorder credential selection/registration, `13-credential-and-authoring-ux.md` is authoritative. It does not replace `07-data-schema.md` field legality or `08-recorder-protocol.md` browser-side secret-capture safety rules.
 
 Development and test operations must comply with `11-development-environment.md`. In particular, agents must never use `sudo`, `su`, root privileges, or OS-level package installation. The installed Microsoft Edge and the approved test sites may be used only within the boundaries defined there.
 
