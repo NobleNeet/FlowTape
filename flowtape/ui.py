@@ -9,14 +9,14 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import yaml
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, QStandardPaths
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QInputDialog, QLabel,
     QListWidget, QMainWindow, QMessageBox, QPushButton, QSplitter, QTextEdit,
-    QVBoxLayout, QWidget, QComboBox, QToolBar)
+    QVBoxLayout, QWidget, QComboBox, QToolBar, QFileDialog)
 
 from . import schema
-from .browser import Resolver, open_edge
+from .browser import Resolver, open_edge, seconds
 from .cli import package
 from .errors import AmbiguousPage, UnknownPage
 from .errors import FlowTapeError
@@ -28,6 +28,7 @@ from .qt_playback import PlaybackWorker
 from .recorder import RecorderTransport, propose_target, propose_collections
 from .identity import ulid
 from .authoring import referenced_targets
+from .lifecycle import Preferences, create_package
 
 
 def recorder_boundary(method):
@@ -39,19 +40,29 @@ def recorder_boundary(method):
             self.status.setText('記録停止: '+self.recorder_error)
     return guarded
 
+def lifecycle_boundary(method):
+    def guarded(self, *args, **kwargs):
+        if self.lifecycle_busy: return False
+        self.lifecycle_busy = True
+        try: return method(self, *args, **kwargs)
+        finally: self.lifecycle_busy = False
+    return guarded
+
+
 class FlowTapeWindow(QMainWindow):
-    def __init__(self, scenario_path: str, config_path: str):
+    def __init__(self, scenario_path=None, config_path=None, *, preferences_path=None):
         super().__init__()
-        self.scenario_path = Path(scenario_path)
-        if self.scenario_path.is_dir(): self.scenario_path /= "scenario.yaml"
-        self.registry_path = self.scenario_path.with_name("elements.yaml")
-        self.config_path = Path(config_path)
-        self.scenario, self.registry = package(str(self.scenario_path))
-        self.config = schema.config(schema.load_yaml(self.config_path), self.config_path)
-        credential_path = Path(self.config["credentials"]["path"])
-        self.credentials = schema.credentials(schema.load_yaml(credential_path)) if credential_path.exists() else None
-        self.saved_mtimes = self._mtimes()
+        preferences_path = preferences_path or (Path(QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.AppConfigLocation)) / 'FlowTape' / 'preferences.json')
+        self.preferences = Preferences(preferences_path)
+        self.scenario_path = self.registry_path = None
+        self.scenario = self.registry = None
+        self.config_path = None
+        self.config = self.credentials = None
+        self.saved_mtimes = None
         self.deferred_mtimes = None
+        self.lifecycle_busy = False
+        self.last_browser_check = 0
         self.processing_events = False
         self.dirty = False
         self.driver = None
@@ -72,12 +83,23 @@ class FlowTapeWindow(QMainWindow):
         self.worker = None
         self.pending_close = False
         self.record_after_play = False
-        self._ensure_ids(self.scenario["steps"])
+        self.actions = {}
+        self.browser_actions = set()
+        self.scenario_actions = set()
         self.setWindowTitle("FlowTape")
         self.resize(1050, 650)
         outer = QWidget()
         self.setCentralWidget(outer)
         layout = QVBoxLayout(outer)
+        file_menu = self.menuBar().addMenu('ファイル')
+        for label, method in [('新規シナリオ', self.new_scenario), ('シナリオを開く', self.choose_scenario),
+                              ('シナリオを閉じる', self.close_scenario), ('保存', self.save), ('終了', self.close)]:
+            action = file_menu.addAction(label)
+            action.triggered.connect(lambda checked=False, callback=method: callback())
+            self.actions[label] = action
+        self.recent_menu = file_menu.addMenu('最近のシナリオ')
+        settings_action = self.menuBar().addAction('設定')
+        settings_action.triggered.connect(self.choose_config)
         toolbar = QToolBar('編集', self)
         self.addToolBar(toolbar)
         for label, method in (("ブラウザ", self.open_browser), ("URLを開く", self.open_url),
@@ -93,11 +115,16 @@ class FlowTapeWindow(QMainWindow):
             action = QAction(label, self)
             action.triggered.connect(method)
             toolbar.addAction(action)
+            self.actions[label] = action
+            if label == 'ブラウザ': action.setText('ブラウザを起動／再試行')
+            if label not in {'ブラウザ', 'URLを開く'}: self.scenario_actions.add(label)
+            if label in {'URLを開く', '記録開始', '選択後に記録', '記録停止', '選択', 'collection 選択',
+                         'bind / rebind', '未登録 target', '診断', 'read'}: self.browser_actions.add(label)
         settings_bar = QHBoxLayout()
         layout.addLayout(settings_bar)
         self.mode_box = QComboBox()
         self.mode_box.addItems(['実行','確認','デバッグ'])
-        self.mode_box.setCurrentText(self.scenario.get('mode','実行'))
+        self.mode_box.setCurrentText('実行')
         self.mode_box.currentTextChanged.connect(self.change_mode)
         settings_bar.addWidget(QLabel('モード'))
         settings_bar.addWidget(self.mode_box)
@@ -109,9 +136,11 @@ class FlowTapeWindow(QMainWindow):
         continue_button = QPushButton('最後まで再生して記録')
         continue_button.clicked.connect(self.play_then_record)
         settings_bar.addWidget(continue_button)
+        self.continue_button = continue_button
         settings_bar.addStretch()
         playback_bar = QHBoxLayout()
         layout.addLayout(playback_bar)
+        self.playback_buttons = []
         for label, method in (("最初から", self.restart_playback), ("再開", self.play),
                               ("1ステップ", self.single_step), ("選択位置まで", self.play_until_selected),
                               ("一時停止", self.pause_playback), ("停止", self.stop_playback),
@@ -119,7 +148,21 @@ class FlowTapeWindow(QMainWindow):
             button = QPushButton(label)
             button.clicked.connect(method)
             playback_bar.addWidget(button)
+            self.playback_buttons.append(button)
         splitter = QSplitter()
+        self.editor_splitter = splitter
+        self.start_view = QWidget()
+        start_layout = QVBoxLayout(self.start_view)
+        start_layout.addWidget(QLabel('シナリオが開かれていません'))
+        for label, method in [('＋ 新規シナリオ', self.new_scenario), ('シナリオを開く', self.choose_scenario)]:
+            button = QPushButton(label)
+            button.clicked.connect(method)
+            start_layout.addWidget(button)
+        self.recent_list = QListWidget()
+        self.recent_list.itemDoubleClicked.connect(lambda item: self.open_scenario(item.data(256)))
+        start_layout.addWidget(QLabel('最近のシナリオ（ダブルクリックで開く）'))
+        start_layout.addWidget(self.recent_list)
+        layout.addWidget(self.start_view)
         layout.addWidget(splitter)
         self.step_list = QListWidget()
         self.step_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
@@ -128,14 +171,232 @@ class FlowTapeWindow(QMainWindow):
         self.properties = QTextEdit()
         splitter.addWidget(self.properties)
         splitter.setSizes([500, 500])
+        self.browser_status = QLabel('Browser: unavailable — 設定を選択してブラウザを起動してください')
+        layout.addWidget(self.browser_status)
         self.status = QLabel("準備完了")
         layout.addWidget(self.status)
         self.timer = QTimer(self)
         self.timer.setInterval(100)
         self.timer.timeout.connect(self.poll)
         self.refresh()
+        candidate = config_path or self.preferences.config_path
+        if candidate: self.load_config(candidate)
+        if scenario_path: self.open_scenario(scenario_path)
+        elif self.preferences.error: self.status.setText(self.preferences.error)
+        self.timer.start()
+
+    def update_actions(self):
+        active = self.scenario is not None
+        ready = self.driver is not None and self.config is not None
+        for label, action in self.actions.items():
+            enabled = True
+            if label in self.scenario_actions or label in {'シナリオを閉じる', '保存'}:
+                enabled = active
+            if label in self.browser_actions:
+                enabled = enabled and ready
+            action.setEnabled(enabled)
+        self.mode_box.setEnabled(active)
+        self.pace_box.setEnabled(active and ready)
+        self.continue_button.setEnabled(active and ready)
+        for button in self.playback_buttons: button.setEnabled(active and ready)
+        self.editor_splitter.setVisible(active)
+        self.start_view.setVisible(not active)
+        self.update_recent()
+
+    def update_recent(self):
+        self.recent_menu.clear()
+        self.recent_list.clear()
+        for source in self.preferences.recent:
+            label = str(Path(source).parent)
+            action = self.recent_menu.addAction(label)
+            action.triggered.connect(lambda checked=False, p=source: self.open_scenario(p))
+            self.recent_list.addItem(label)
+            self.recent_list.item(self.recent_list.count()-1).setData(256, source)
+        self.recent_menu.setEnabled(bool(self.preferences.recent))
+
+    def shutdown_browser(self):
+        for resource, method in [(self.transport, 'close'), (self.driver, 'quit')]:
+            if resource is not None:
+                try: getattr(resource, method)()
+                except Exception: pass
+        self.driver = self.transport = None
+        self.browser_status.setText('Browser: unavailable')
+        self.update_actions()
+
+    @lifecycle_boundary
+    def load_config(self, path):
+        try:
+            source = Path(path).resolve()
+            config = schema.config(schema.load_yaml(source), source)
+            credential_path = Path(config['credentials']['path'])
+            credentials = schema.credentials(schema.load_yaml(credential_path)) if credential_path.exists() else None
+        except Exception as exc:
+            self.status.setText('設定エラー: '+str(exc))
+            if self.driver is None:
+                self.browser_status.setText('Browser: unavailable — 設定を確認してください')
+            QMessageBox.warning(self, '設定エラー', str(exc))
+            return False
+        if config == self.config and source == self.config_path and credentials == self.credentials: return True
+        restart_required = self.config is None or any(config[key] != self.config[key] for key in ('browser', 'driver')) or (
+            config['paths']['downloads'] != self.config['paths']['downloads'])
+        if self.driver is not None and restart_required:
+            answer = QMessageBox.question(self, '設定の変更',
+                '設定の変更にはブラウザの再起動が必要です。現在のブラウザ状態を失います。再起動しますか？')
+            if answer != QMessageBox.StandardButton.Yes: return False
+        if not self.resolve_boundary(include_unsaved=False): return False
+        if restart_required: self.shutdown_browser()
+        elif self.driver is not None:
+            try: self.driver.set_page_load_timeout(seconds(config['timeouts']['page_load']))
+            except Exception: self.shutdown_browser()
+        self.controller = self.worker = None
+        self.config_path, self.config, self.credentials = source, config, credentials
+        self.preferences.config_path = str(source)
+        self.preferences.save()
+        self.status.setText(self.preferences.error or 'アプリ設定を読み込みました')
+        return True
+
+    def choose_config(self):
+        source, _ = QFileDialog.getOpenFileName(self, 'アプリ設定を選択',
+            str(self.config_path or Path.cwd()), 'YAML (*.yaml *.yml)')
+        if source and self.load_config(source): self.open_browser()
+
+    def resolve_boundary(self, *, include_unsaved=True):
+        """Resolve activity and unsaved state before relinquishing its package."""
+        if self.worker and self.worker.isRunning():
+            if QMessageBox.question(self, '再生中', '再生を停止して続行しますか？') != QMessageBox.StandardButton.Yes:
+                return False
+            self.record_after_play = False
+            self.controller.stop()
+            self.worker.confirm(False)
+            if not self.worker.wait(3000):
+                self.status.setText('再生の停止を待っています。停止後にもう一度操作してください')
+                return False
+        if self.recording or self.picking:
+            if QMessageBox.question(self, '記録・選択中', '記録・選択を停止して続行しますか？') != QMessageBox.StandardButton.Yes:
+                return False
+            if self.recording:
+                self.stop_record()
+            else:
+                try:
+                    self.picking = self.collection_picking = False
+                    self.operation_queue.extend(self.transport.stop())
+                    self._process_operations()
+                except Exception as exc: self.recorder_error = str(exc)
+        if self.pending_operation or self.operation_queue or self.recorder_error:
+            if QMessageBox.question(self, '未確定の記録',
+                '未確定の記録を破棄して続行しますか？（いいえで戻って確定できます）') != QMessageBox.StandardButton.Yes:
+                return False
+            try:
+                if self.transport: self.transport.reset()
+            except Exception as exc:
+                self.status.setText('記録のリセットに失敗しました: '+str(exc))
+                return False
+            self.pending_operation = None
+            self.operation_queue.clear()
+            self.recorder_error = None
+        if include_unsaved and self.dirty:
+            choice, ok = QInputDialog.getItem(self, '未保存の変更', '現在のシナリオに未保存の変更があります',
+                ['保存して続行', '変更を破棄して続行', 'キャンセル'], editable=False)
+            if not ok or choice == 'キャンセル': return False
+            if choice == '保存して続行' and not self.save(): return False
+        return True
+
+    def unload_scenario(self):
+        # Stop observing raw events at an explicit boundary; retain the Edge session.
+        if self.transport:
+            try: self.transport.reset()
+            except Exception:
+                # Browser loss cannot make package inspection/editing unavailable.
+                self.shutdown_browser()
+        self.scenario = self.registry = None
+        self.scenario_path = self.registry_path = None
+        self.controller = self.worker = None
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.recording = self.picking = self.collection_picking = False
+        self.pending_operation = self.record_position = self.binding_name = self.pending_read = None
+        self.operation_queue.clear()
+        self.recorder_error = None
+        self.confirmed_destructive = self.record_after_play = self.pending_close = False
+        self.dirty = False
+        self.saved_mtimes = self.deferred_mtimes = None
+        self.refresh()
+
+    @lifecycle_boundary
+    def close_scenario(self):
+        if self.scenario is None: return True
+        if not self.resolve_boundary(): return False
+        try: self.unload_scenario()
+        except Exception as exc:
+            QMessageBox.warning(self, 'シナリオを閉じる', str(exc))
+            return False
+        self.status.setText('シナリオを閉じました')
+        return True
+
+    def _activate(self, source, scenario, registry):
+        self.unload_scenario()
+        self.scenario_path = Path(source).resolve()
+        self.registry_path = self.scenario_path.with_name('elements.yaml')
+        self.scenario, self.registry = scenario, registry
+        self._ensure_ids(self.scenario['steps'])
+        self.saved_mtimes = self._mtimes()
+        self.preferences.remember(self.scenario_path)
+        self.refresh()
+        self.status.setText(self.preferences.error or 'シナリオを開きました')
+
+    @lifecycle_boundary
+    def open_scenario(self, path):
+        source = Path(path).resolve()
+        if source.is_dir(): source /= 'scenario.yaml'
+        if not source.exists() and not journal_path(source).exists():
+            QMessageBox.warning(self, 'シナリオを開く', f'シナリオが見つかりません: {source}')
+            if str(source) in self.preferences.recent:
+                if QMessageBox.question(self, '最近のシナリオ', '存在しない項目を一覧から削除しますか？') == QMessageBox.StandardButton.Yes:
+                    self.preferences.forget(source)
+                    self.update_recent()
+            return False
+        if not self.resolve_boundary(): return False
+        try:
+            if journal_path(source).exists():
+                choice, ok = QInputDialog.getItem(self, '保存の復旧', '中断した保存を検出しました。復旧を選択してください',
+                    ['保存前に戻す', '保存を完了する', 'キャンセル'], editable=False)
+                if not ok or choice == 'キャンセル': return False
+                recover_package(source, 'rollback' if choice == '保存前に戻す' else 'complete')
+            scenario, registry = package(str(source))
+            self._activate(source, scenario, registry)
+            return True
+        except Exception as exc:
+            QMessageBox.warning(self, 'シナリオを開く', str(exc))
+            return False
+
+    def choose_scenario(self):
+        source, _ = QFileDialog.getOpenFileName(self, 'シナリオを開く',
+            self.config['paths']['scenarios'] if self.config else str(Path.cwd()), 'Scenario (scenario.yaml)')
+        if source: self.open_scenario(source)
+
+    def new_scenario(self):
+        name, ok = QInputDialog.getText(self, '新規シナリオ', 'シナリオ名')
+        if not ok or not name.strip(): return False
+        # Destination is selected as a full new package directory, never a merge.
+        source, _ = QFileDialog.getSaveFileName(self, '新しいパッケージの保存先（新規フォルダー名）',
+            str(Path(self.config['paths']['scenarios'] if self.config else Path.cwd()) / name))
+        if not source: return False
+        return self.create_scenario(name, source)
+
+    @lifecycle_boundary
+    def create_scenario(self, name, destination):
+        if not self.resolve_boundary(): return False
+        try:
+            source = create_package(name, destination)
+            scenario, registry = package(str(source))
+            self._activate(source, scenario, registry)
+            return True
+        except Exception as exc:
+            QMessageBox.warning(self, '新規シナリオ', str(exc))
+            return False
 
     def _mtimes(self):
+        if self.scenario_path is None: return None
         return tuple(p.stat().st_mtime_ns if p.exists() else None for p in (self.scenario_path, self.registry_path))
 
     def _ensure_ids(self, steps):
@@ -163,6 +424,13 @@ class FlowTapeWindow(QMainWindow):
         self.refresh()
 
     def refresh(self):
+        self.update_actions()
+        if self.scenario is None:
+            self.rows = []
+            self.step_list.clear()
+            self.properties.clear()
+            self.setWindowTitle('FlowTape — シナリオなし')
+            return
         self.mode_box.blockSignals(True)
         self.mode_box.setCurrentText(self.scenario.get('mode','実行'))
         self.mode_box.blockSignals(False)
@@ -553,20 +821,25 @@ class FlowTapeWindow(QMainWindow):
         self._changed()
 
     def open_browser(self):
+        if not self._browser_available(): return
         if self.driver: return
+        if self.config is None:
+            self.browser_status.setText('Browser: unavailable — 設定から config.yaml を選択してください')
+            return
         try:
             self.driver = open_edge(self.config)
             self.transport = RecorderTransport(self.driver)
             self.transport.inject('observe')
+            self.controller = None
+            self.confirmed_destructive = self.record_after_play = False
             self.timer.start()
             self.status.setText("Edge 起動済み")
+            self.browser_status.setText("Browser: ready")
         except Exception as exc:
-            if self.transport: self.transport.close()
-            if self.driver: self.driver.quit()
-            self.driver=None
-            self.transport=None
+            self.shutdown_browser()
             self.status.setText('Edge 起動失敗: '+str(exc))
-            QMessageBox.critical(self, "Edge", str(exc))
+            self.browser_status.setText('Browser: unavailable — '+str(exc)+'（ブラウザから再試行／設定から変更）')
+        self.update_actions()
 
     def open_url(self):
         if not self._browser_available(): return
@@ -575,10 +848,11 @@ class FlowTapeWindow(QMainWindow):
         url, ok = QInputDialog.getText(self, "URL", "URL")
         if not ok or not url: return
         self.driver.get(url)
-        self._insert_node({'action':'open','url':url},recording=True)
+        if self.scenario is not None: self._insert_node({'action':'open','url':url},recording=True)
 
     @recorder_boundary
     def start_record(self):
+        if self.scenario is None or self.driver is None: return
         if not self._browser_available(): return
         if self.recorder_error:
             if QMessageBox.question(self,'記録の同期回復','不確かな区間の未確定イベントを破棄し、新しい記録境界から開始しますか？') != QMessageBox.StandardButton.Yes: return
@@ -632,6 +906,7 @@ class FlowTapeWindow(QMainWindow):
 
     @recorder_boundary
     def start_pick(self):
+        if self.scenario is None or self.driver is None: return
         if not self._browser_available(): return
         self.open_browser()
         if not self.driver: return
@@ -678,12 +953,24 @@ class FlowTapeWindow(QMainWindow):
 
     def poll(self):
         if self.worker and self.worker.isRunning(): return
-        if self.processing_events: return
+        if self.processing_events or self.lifecycle_busy: return
         self.processing_events = True
-        try: self._poll_events()
+        try:
+            if self.driver is not None and time.monotonic()-self.last_browser_check >= 1:
+                self.last_browser_check = time.monotonic()
+                try:
+                    if not self.driver.window_handles: raise RuntimeError('制御ブラウザが閉じられました')
+                except Exception:
+                    if self.recording or self.picking:
+                        self.recorder_error = 'ブラウザとの接続が失われました。未確定の記録を確認してください'
+                    self.recording = self.picking = False
+                    self.shutdown_browser()
+                    self.browser_status.setText('Browser: unavailable — 接続が失われました。ブラウザから再試行してください')
+            self._poll_events()
         finally: self.processing_events = False
 
     def _poll_events(self):
+        if self.scenario is None: return
         changed = self._mtimes()
         if changed != self.saved_mtimes and changed != self.deferred_mtimes:
             self.reconcile_external()
@@ -912,6 +1199,7 @@ class FlowTapeWindow(QMainWindow):
             self._insert_node(dict(node,target=name))
 
     def save(self):
+        if self.scenario is None: return False
         try:
             schema.scenario(self.scenario)
             schema.elements(self.registry)
@@ -923,10 +1211,13 @@ class FlowTapeWindow(QMainWindow):
             self.dirty = False
             self.refresh()
             self.status.setText("保存しました")
+            return True
         except Exception as exc:
             QMessageBox.warning(self, "保存エラー", str(exc))
+            return False
 
     def _new_playback(self):
+        if self.scenario is None or self.driver is None or self.config is None: return False
         self.stop_record()
         if self.pending_operation or self.operation_queue or self.recorder_error:
             self.status.setText('保留中の記録を確定または破棄してから再生してください')
@@ -945,6 +1236,7 @@ class FlowTapeWindow(QMainWindow):
         return True
 
     def change_mode(self, mode):
+        if self.scenario is None: return
         if self.controller and self.controller.state not in {'complete','stopped'}:
             self.mode_box.blockSignals(True)
             self.mode_box.setCurrentText(self.scenario.get('mode','実行'))
@@ -972,9 +1264,10 @@ class FlowTapeWindow(QMainWindow):
             if self.controller is None or self.controller.state in {"complete", "stopped"}:
                 if not self._new_playback(): return
             self.worker = PlaybackWorker(self.controller, max_actions=max_actions, until_id=until_id, parent=self)
-            self.worker.gate_requested.connect(self._confirm_action)
-            self.worker.action_completed.connect(self._action_completed)
-            self.worker.finished.connect(self._playback_finished)
+            worker = self.worker
+            worker.gate_requested.connect(self._worker_gate)
+            worker.action_completed.connect(self._worker_completed)
+            worker.finished.connect(self._worker_finished)
             self.worker.start()
             self.status.setText("再生中")
         except Exception as exc:
@@ -1024,6 +1317,15 @@ class FlowTapeWindow(QMainWindow):
         self.controller.skip()
         self.status.setText("失敗した Step をスキップしました。再開できます")
 
+    def _worker_gate(self, node):
+        if self.sender() is self.worker: self._confirm_action(node)
+
+    def _worker_completed(self, node):
+        if self.sender() is self.worker: self._action_completed(node)
+
+    def _worker_finished(self):
+        if self.sender() is self.worker: self._playback_finished()
+
     def _confirm_action(self, node):
         policy = self.config["safety"]["destructive_confirmation"]
         accepted = True
@@ -1043,6 +1345,7 @@ class FlowTapeWindow(QMainWindow):
             self.status.setText(self.status.text()+' / '+self.controller.player.log.error)
 
     def _playback_finished(self):
+        if self.controller is None: return
         state = self.controller.state
         if state == "failed":
             self.status.setText(str(self.controller.error))
@@ -1060,28 +1363,23 @@ class FlowTapeWindow(QMainWindow):
             self.record_after_play = False
 
     def closeEvent(self, event):
-        if self.worker and self.worker.isRunning():
-            self.pending_close = True
-            self.stop_playback()
+        if self.lifecycle_busy:
             event.ignore()
             return
-        if (self.dirty or self.pending_operation or self.operation_queue) and QMessageBox.question(self, "未保存", "未保存の変更または未確定の記録があります。閉じますか？") != QMessageBox.StandardButton.Yes:
+        self.lifecycle_busy = True
+        try: ready = self.resolve_boundary()
+        finally: self.lifecycle_busy = False
+        if not ready:
             event.ignore()
             return
-        if self.transport: self.transport.close()
-        if self.driver: self.driver.quit()
+        self.timer.stop()
+        self.shutdown_browser()
         event.accept()
 
 
-def launch(scenario_path: str, config_path: str) -> int:
+def launch(scenario_path=None, config_path=None) -> int:
     app = QApplication.instance() or QApplication([])
-    source=Path(scenario_path)
-    if source.is_dir():source/='scenario.yaml'
-    if journal_path(source).exists():
-        choice,ok=QInputDialog.getItem(None,'保存の復旧','中断した保存を検出しました。明示的な復旧を選択してください',
-                                      ['保存前に戻す','保存を完了する','キャンセル'],editable=False)
-        if not ok or choice=='キャンセル':return 1
-        recover_package(source,'rollback' if choice=='保存前に戻す' else 'complete')
     window = FlowTapeWindow(scenario_path, config_path)
     window.show()
+    QTimer.singleShot(0, window.open_browser)
     return app.exec()

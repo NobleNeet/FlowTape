@@ -1,6 +1,6 @@
 # FlowTape v1 実装・仕様照合
 
-`AGENTS.md` と `docs/00`〜`11` を基準とした実装監査です。仕様そのものは変更していません。
+`AGENTS.md` と `docs/00`〜`12` を基準とした実装監査です。アプリの起動・シナリオのライフサイクルは `12` に従い、`03` / `06` の関連記述と README を更新しました。
 
 ## 実装範囲
 
@@ -21,11 +21,33 @@
 
 ## 検証
 
-- 最終 pytest: **43 passed in 63.43s**。schema、semantic locator、曖昧・ゼロ件、frame / shadow、Recorder、loops、outputs、taint、UI 編集、再生カーソル、window tracking、保存 failure / 中断復旧、writer 競合、診断 log を検証。
+- Lifecycle 実装後の最終 pytest: **64 passed in 43.91s**。既存43件と Lifecycle 21件を含み、失敗・skip はありません。
+- 初期実装の pytest: **43 passed in 63.43s**。schema、semantic locator、曖昧・ゼロ件、frame / shadow、Recorder、loops、outputs、taint、UI 編集、再生カーソル、window tracking、保存 failure / 中断復旧、writer 競合、診断 log を検証。
 - Edge 154.0.4258.37 と対応する user-cache WebDriver を使用。HTTP fixture は VM 内の `127.0.0.1` / `localhost` のみ。別オリジンと OOP iframe を含む。
 - 画面表示ありの Edge と PySide6 で 1 Step → 続行 → click / read / append、picker の抑止と採取要素の一致を確認。
 - PyInstaller 配布物から外部 scenario / registry / config を使った localhost 再生と UI 起動を確認。配布物の `doctor` でも、隔離した data fixture への Recorder 注入・picker・イベント配送・採取要素への再解決を確認（`capture_verified: true`）。
 - 再現コマンド: README と `scripts/smoke_desktop.py`。画面と結果は `build/desktop-smoke/`。
+
+## Application / Scenario Lifecycle の仕様照合
+
+`docs/12-application-scenario-lifecycle.md` の各項目を現在の実装に照合しました。既存の Recorder / Player の DSL、capture protocol、resolver、runtime semantics は変更していません。
+
+| 仕様の節 | 実装と確認根拠 |
+|---|---|
+| 1, 2, 16, 20: 独立した lifetime と neutral startup | scenario / registry が `None` のウィンドウ、開始画面、独立した browser status、`launch` から起動を試行。CLI / neutral state / 起動テストと実 Edge desktop smoke |
+| 3, 4, 19: browser unavailable と command prerequisites | browser failure を状態として表示、再試行／設定、scenario のみ必要な編集・保存を許可。ブラウザ断絶を検出し browser 操作を無効化。failure / retry / loss テスト |
+| 5: New Scenario | 名前と新規 package directory を指定、schema / cross-file validation、stage と排他的 directory 作成。既存 directory は拒否、I/O failure では activation しない。exclusive / rollback / menu テスト |
+| 6, 8: Open と active scenario | directory または scenario.yaml、既存 `package` による YAML / schema / cross-file validation。失敗時に既存 state を保持。invalid registry / invalid cross-file / missing package テスト |
+| 7: Recent Scenarios | user-private preferences、最大10件、menu / 開始画面から同じ Open、毎回検証。不存在は報告して削除を確認。reload / stale / revalidation テスト |
+| 9, 10, 11: switch / close / exit | 共通の recording / picking / playback / pending / unsaved boundary。保存／破棄／キャンセル、失敗した保存は switch 中止。実行中 worker の停止完了を待ち、停止未完了なら current state を保持。modal 中の capture 再入を防止。boundary / save failure / exit / reentrancy テスト |
+| 12, 18: browser retention と既存 Recorder / Editor | Close / New / Open は通常同じ Edge を保持。controller / undo / redo / binding / insertion / pending state は解除。記録開始は明示操作。headed Edge で close → new → record → save → reopen → play → open を確認 |
+| 13: Application Configuration | explicit CLI path または remembered config path、Settings から外部 config を選択。browser / driver / profile / download directory の変更は restart 確認、runtime defaults は browser を保持。config / remember / restart / runtime-only テスト |
+| 14, 15: File menu と CLI | New / Open / Recent / Close / Save / Exit、`flowtape ui [scenario] [--config CONFIG]`。Save As は optional のため提供しない。menu / CLI テストと配布物の help |
+| 17: package-local recovery | 開こうとする package だけ検査し、既存 rollback / complete を再利用。キャンセルで application 継続。scenario file が欠落していても journal から復旧可能。recovery / cancellation / missing-file テスト |
+
+新しい自動テストは `tests/test_lifecycle.py`。既存テストと合わせて回帰検証し、実ブラウザの再現手順は `scripts/smoke_desktop.py` に組み込みました。配布成果物やスクリーンショットは gitignore 対象です。
+
+Lifecycle 実装後の headed desktop smoke は8項目すべて成功しました。開始画面は `build/desktop-smoke/start.png` で実際の表示と command 無効状態を確認。Linux 配布物を再ビルドし、シナリオ引数なし・不存在 WebDriver での GUI 継続、外部 package の CLI 再生、Recorder の capture / 再解決を確認しました。テスト用 preferences は一時ディレクトリへ隔離しています。
 
 ## 未確認事項・残課題
 
@@ -43,3 +65,5 @@
 Python 依存関係は `.venv` に導入しました。sudo / su / root / OS package installation は行っていません。開発・検証中は GitHub push、PR・Issue・Release の作成・変更、VM 外への書き込みを行っていません。公開テストサイトは利用していません。
 
 実装報告後、ユーザーから今回の変更の commit / push を明示的に指示されました。この指示を今回の GitHub push の許可として扱います。ビルド成果物、仮想環境、Python 配布パッケージ、キャッシュ、実行時データは `.gitignore` で除外します。
+
+その後の Lifecycle 実装では VM 内のソース変更・検証だけを実施しました。検証結果の報告後、ユーザーから Lifecycle 変更の commit / push も明示的に指示されました。この追加指示を今回の push の許可として扱います。PR・Issue・Release 操作は実施していません。

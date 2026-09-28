@@ -33,6 +33,8 @@ The browser is the place where the user indicates real DOM elements. The scenari
 
 The exact widget implementation may evolve, but these responsibilities and the two-window model should remain separated.
 
+Application startup and New/Open/Close operations are defined by `12-application-scenario-lifecycle.md`. The GUI starts without requiring a scenario package. In `No Scenario`, a start view offers New/Open and recent packages; the editor appears after validated activation. Browser readiness is independent: browser failure leaves non-browser editing available. Closing a scenario normally retains the controlled browser; exiting the application shuts it down after resolving pending and unsaved state.
+
 ## 2. Recording model
 
 The Recorder is optimized for recording a normal successful path.

@@ -105,6 +105,8 @@ If Edge/WebDriver versions are incompatible, FlowTape reports the problem; it do
 
 `config.yaml` is the runtime/environment configuration file.
 
+Configuration belongs to the application/environment, independently of a scenario package (`12-application-scenario-lifecycle.md`). `flowtape ui` accepts optional scenario and `--config` arguments. Without an explicit config, the GUI may load a previously selected configuration from private application preferences. If no valid configuration is available, the application remains open with Browser unavailable and provides Settings to select an external config. FlowTape never invents or downloads a driver path. Browser/driver/profile/download-directory changes require explicit browser restart confirmation and a safe recording/playback boundary; other runtime defaults can change without replacing the browser.
+
 Representative initial shape:
 
 ```yaml

@@ -22,11 +22,13 @@ driver:
 
 ## 使い方
 
-シナリオディレクトリには `scenario.yaml` と `elements.yaml` を置きます。
+GUI は既存の YAML なしで起動できます。「新規シナリオ」で名前と保存先を指定すると、検証済みの `scenario.yaml` と `elements.yaml` を作成します。「シナリオを開く」では既存パッケージを選択できます。
 
 ```bash
 flowtape validate /path/to/scenario-directory
 flowtape run /path/to/scenario-directory --config /path/to/config.yaml
+flowtape ui
+flowtape ui --config /path/to/config.yaml
 flowtape ui /path/to/scenario-directory --config /path/to/config.yaml
 flowtape doctor --config /path/to/config.yaml --headless
 ```
@@ -34,6 +36,15 @@ flowtape doctor --config /path/to/config.yaml --headless
 CLI 再生は `scenario.yaml` の `mode` に従います。画面では `実行` / `確認` / `デバッグ` と再生速度を別々に選べます。`risk: 破壊的` の実行には、設定された確認ポリシーを適用します。
 
 `doctor` は外部サイトを使わず、設定された Edge / WebDriver と Recorder の注入・選択・要素一致を確認します。
+
+### アプリ起動とシナリオの切り替え
+
+- 起動時に Edge の起動を試みます。設定がない場合やブラウザ起動に失敗した場合も、シナリオ作成・読込・編集・保存ができます。「設定」で外部 `config.yaml` を選び、「ブラウザを起動／再試行」で復旧できます。
+- ファイルメニューから新規・開く・閉じる・保存・終了を操作できます。新規作成は既存のフォルダーを上書き・併合しません。
+- 切り替え・閉じる・終了時には記録／再生を停止するか確認し、未確定記録の破棄、未保存変更の保存／破棄／キャンセルを明示的に選択します。保存が失敗した場合は切り替えません。
+- 「シナリオを閉じる」はブラウザを維持して開始画面へ戻ります。新規／別パッケージを開いてもブラウザ状態は継続し、再生進行・undo・記録の挿入位置などは引き継ぎません。
+- 最近のシナリオ（最大10件）と設定ファイルのパスは Qt のユーザー用 AppConfigLocation 配下の `FlowTape/preferences.json` に保存します。シナリオ YAML や credential 値はここへ保存しません。最近の項目も開くたびに検証し、存在しない項目は確認して削除できます。
+- ブラウザ／driver／profile／download directory の設定変更は、明示的な再起動確認が必要です。ログ・待機など他の runtime defaults の変更ではブラウザを維持します。
 
 ### Recorder / Editor
 
@@ -45,7 +56,7 @@ CLI 再生は `scenario.yaml` の `mode` に従います。画面では `実行`
 - 名前変更はページ別に参照を解析し、ページを確定できない参照は明示的に確認します。
 - 保存は明示操作です。外部編集を検出したら再読込・GUI 保持・保留を選べます。保存途中の I/O エラーでは両ファイルを元に戻します。
 
-保存途中のプロセス終了は package 内の `.flowtape-save.json` で検出します。UI 起動時の選択、または `flowtape recover /path/to/package --choice rollback` / `--choice complete` で、保存前へ戻すか保存を完了するか明示的に決めます。未復旧の package は実行しません。
+保存途中のプロセス終了は package 内の `.flowtape-save.json` で検出します。パッケージを開くときの選択、または `flowtape recover /path/to/package --choice rollback` / `--choice complete` で、保存前へ戻すか保存を完了するか明示的に決めます。未復旧の package は実行しません。
 
 同じ package の同時保存は writer lock で拒否します。run の診断は `paths.logs` 配下へ `logging.level` に従って保存します。展開済みの入力値・取得値は記録せず、credential 値は redaction します。
 

@@ -17,7 +17,7 @@ def test_editor_wrap_undo_save(tmp_path):
     ]})
     save_yaml(tmp_path / "elements.yaml", {"version": 1, "pages": {}})
     save_yaml(tmp_path / "config.yaml", {"version": 1, "driver": {"path": "/tmp/msedgedriver"}})
-    window = FlowTapeWindow(str(scenario_path), str(tmp_path / "config.yaml"))
+    window = FlowTapeWindow(str(scenario_path), str(tmp_path / "config.yaml"), preferences_path=tmp_path/"preferences.json")
     window.step_list.item(0).setSelected(True)
     window.step_list.item(1).setSelected(True)
     with patch("flowtape.ui.QInputDialog.getInt", return_value=(2, True)):
@@ -38,7 +38,7 @@ def test_nested_insertion_and_external_reload_preserve_undo(tmp_path):
     save_yaml(source, {'version':1,'name':'UI','steps':[{'repeat':{'count':2,'steps':[{'action':'back'},{'action':'forward'}]}},{'action':'refresh'}]})
     save_yaml(tmp_path/'elements.yaml',{'version':1,'pages':{}})
     save_yaml(tmp_path/'config.yaml',{'version':1,'driver':{'path':'/tmp/msedgedriver'}})
-    window = FlowTapeWindow(str(source),str(tmp_path/'config.yaml'))
+    window = FlowTapeWindow(str(source),str(tmp_path/'config.yaml'), preferences_path=tmp_path/'preferences.json')
     window.step_list.setCurrentRow(1)
     parent = window.rows[1][1]
     from flowtape.editor import sequences
@@ -66,7 +66,7 @@ def test_destructive_confirmation_policy_and_cancel(tmp_path):
     save_yaml(source,{'version':1,'name':'gate','steps':[]})
     save_yaml(tmp_path/'elements.yaml',{'version':1,'pages':{}})
     save_yaml(tmp_path/'config.yaml',{'version':1,'driver':{'path':'/tmp/msedgedriver'}})
-    window=FlowTapeWindow(str(source),str(tmp_path/'config.yaml'))
+    window=FlowTapeWindow(str(source),str(tmp_path/'config.yaml'), preferences_path=tmp_path/'preferences.json')
     from PySide6.QtWidgets import QMessageBox
     class Worker:
         answers=[]

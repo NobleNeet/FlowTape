@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import subprocess
 import tempfile
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -10,7 +11,7 @@ from threading import Thread
 from time import monotonic, sleep
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from flowtape.browser import Resolver
 from flowtape.recorder import propose_target
@@ -49,7 +50,7 @@ def main():
         save_yaml(folder/'scenario.yaml',scenario)
         save_yaml(folder/'elements.yaml',registry)
         save_yaml(folder/'config.yaml',cfg)
-        window=FlowTapeWindow(str(folder/'scenario.yaml'),str(folder/'config.yaml'))
+        window=FlowTapeWindow(config_path=str(folder/'config.yaml'), preferences_path=folder/'preferences.json')
         window.show()
         def finish_worker():
             deadline=monotonic()+15
@@ -63,7 +64,13 @@ def main():
             with patch('flowtape.ui.QMessageBox.critical'):
                 window.open_browser()
             assert window.driver is not None, window.status.text()
+            assert window.scenario is None
+            app.processEvents()
+            window.grab().save(str(artifacts/'start.png'))
             window.driver.get(url)
+            browser = window.driver
+            assert window.open_scenario(folder)
+            checks.append('neutral application opens a package after independent browser startup')
             window.single_step();finish_worker()
             assert window.controller.state=='paused'
             assert window.driver.find_element('id','name').get_attribute('value')=='FlowTape'
@@ -85,6 +92,30 @@ def main():
             app.processEvents()
             window.grab().save(str(artifacts/'desktop.png'))
             window.driver.save_screenshot(str(artifacts/'edge.png'))
+            assert window.close_scenario()
+            assert window.driver is browser and browser.current_url == url
+            assert window.create_scenario('新規記録', folder/'new-package')
+            assert not window.recording and window.controller is None
+            # Dialog responses only confirm names/identify; capture and resolution are real.
+            with patch('flowtape.ui.QInputDialog.getText', side_effect=[('local',True),('送信',True)]), \
+                 patch('flowtape.ui.QInputDialog.getMultiLineText', return_value=('url:\n  equals: '+url,True)), \
+                 patch('flowtape.ui.QMessageBox.question', return_value=QMessageBox.StandardButton.Yes):
+                window.start_record()
+                browser.find_element('id','submit').click()
+                window.stop_record()
+            assert window.recorder_error is None and window.pending_operation is None
+            assert window.scenario['steps'][0]['action']=='click'
+            assert window.registry['pages']['local']['elements']['送信']['locate']
+            assert window.save()
+            assert window.close_scenario()
+            assert window.open_scenario(folder/'new-package')
+            window.play();finish_worker()
+            assert window.controller.state=='complete'
+            assert browser.execute_script('return document.body.dataset.count')=='3'
+            assert window.driver is browser
+            assert window.open_scenario(folder)
+            assert window.controller is None and not window.undo_stack
+            checks.append('Close/New/record/save/reopen/play/Open retain Edge while isolating scenario state')
             if args.executable:
                 frozen=dict(scenario,steps=[{'action':'open','url':url}]+scenario['steps'])
                 save_yaml(folder/'scenario.yaml',frozen)
@@ -92,11 +123,16 @@ def main():
                 checks.append('PyInstaller executable performs the localhost scenario with external YAML/config')
                 subprocess.run([str(Path(args.executable).resolve()),'doctor','--config',str(folder/'config.yaml'),'--headless'],check=True,timeout=30)
                 checks.append('PyInstaller Recorder injects, picks, transports, and verifies a live element on an isolated data fixture')
-                gui=subprocess.Popen([str(Path(args.executable).resolve()),'ui',str(folder),'--config',str(folder/'config.yaml')],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                # Frozen GUI startup is checked with an unavailable driver so terminating
+                # this subprocess cannot strand a newly launched Edge/driver process.
+                unavailable=folder/'unavailable.yaml'
+                save_yaml(unavailable,{'version':1,'driver':{'path':str(folder/'missing-driver')}})
+                gui=subprocess.Popen([str(Path(args.executable).resolve()),'ui','--config',str(unavailable)],
+                    env=dict(os.environ,XDG_CONFIG_HOME=str(folder/'app-config')),stdout=subprocess.PIPE,stderr=subprocess.PIPE)
                 try:
                     sleep(2)
                     assert gui.poll() is None, 'packaged UI failed to start: '+gui.communicate()[1].decode(errors='replace')
-                    checks.append('PyInstaller desktop UI starts with packaged Qt and observer resources')
+                    checks.append('PyInstaller desktop UI starts without a scenario and survives unavailable WebDriver')
                 finally:
                     if gui.poll() is None: gui.terminate()
                     gui.communicate(timeout=10)
