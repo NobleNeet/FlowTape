@@ -70,6 +70,14 @@ Credential / config は single-file atomic replacement と既存 kernel writer l
 
 `tests/test_authoring_ux.py` と更新した lifecycle tests、および `scripts/smoke_authoring.py` で検証。headed Edge と実 Qt Settings / New / credential dialogs による 5 項目は正常終了しました。既存 desktop / frozen CLI / Recorder smoke の8項目も通過。Qt の終了時に native widget cleanup の異常が一度再現したため、main window を close 時に破棄し、smoke では deferred deletion を application cleanup 前に処理するよう修正。修正後の authoring smoke は終了コード0です。
 
+## docs/13 レビューの3点への対応
+
+- 初回の config / credential 保存では保存層が未作成の親ディレクトリを明示的に作成。従来の writer lock による作成にも依存せず、別々の深い保存先、作成失敗、既存ファイルの競合拒否、secret を含まないエラーを検証。
+- 既存／新規 credential group の username が存在しない・空・空白のみの場合、ID の関連付け確認を表示せず、記録済み literal を保持。有効な username の場合のみ明示確認を行う。
+- 認証待ちを target-rebind / navigation recovery と区別。キャンセル／登録失敗後は timer polling で対象再選択を開始せず、「認証情報の選択を再試行」で確認済み target のまま再試行。完了・破棄・scenario unload の境界で状態をクリア。通常の navigation recovery は維持。
+- 最終 pytest: **100 passed in 54.20s**。回帰テストには既存／新規の username 状態、確認 Yes / No、認証キャンセル・保存失敗・再キャンセル・再試行・破棄、navigation recovery を含む。
+- 更新した `scripts/smoke_authoring.py` を実 Qt / headed Edge / localhost で実行し **6項目成功、終了コード0**。未作成の独立した config / credential 親ディレクトリへの保存、実ダイアログのキャンセル、対象を再選択しない再試行、共有 credential 再利用と Player 再生、password 非漏洩を確認。結果は `build/authoring-smoke/report.json`（Git 対象外）。今回の修正後の配布物再ビルド・配布物での検証は未実施。
+
 ## 未確認事項・残課題
 
 1. **Windows 11** の実機、Windows 用 PyInstaller build、Windows のファイル永続化・Edge / WebDriver 起動・画面配置。Linux build が Windows build の検証を代替するわけではない。

@@ -28,6 +28,7 @@ def atomic_yaml(path, document, expected):
     path = Path(path)
     temporary = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with writer_lock(path):
             if snapshot(path) != expected:
                 raise EnvironmentStoreError('ファイルが外部で変更されました。再読込してから保存してください。')

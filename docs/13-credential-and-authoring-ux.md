@@ -33,6 +33,8 @@ Manual editing of `config.yaml`, `credentials.yaml`, `scenario.yaml`, and `eleme
 
 The GUI must provide an application-level settings workflow capable of creating or updating a usable runtime configuration rather than requiring the user to prepare `config.yaml` manually before first use.
 
+Explicit saves create missing parent directories for the config or shared credential file. Directory-creation failures follow the same failure-aware persistence rules as file-write failures.
+
 At minimum the settings UI should expose:
 
 - Microsoft Edge executable when an explicit path is needed
@@ -281,6 +283,8 @@ When a secret/password input is resolved to a credential group, FlowTape should 
 
 If such a candidate exists, the user should be asked explicitly whether it belongs to the same credential group.
 
+Offer pairing only when the selected or newly registered group contains a usable username string (non-empty after whitespace checking). Otherwise preserve the recorded username literal and do not offer a reference to a missing or blank username. This does not change manually authored credential schema legality.
+
 Example:
 
 ```text
@@ -354,6 +358,8 @@ If the user cancels credential resolution for a password input:
 - plaintext must still not be persisted
 - the operation remains unresolved/pending or is discarded according to Recorder pending-operation rules
 - FlowTape must not generate a runnable password step containing an empty/literal placeholder that appears valid
+
+Credential resolution is a distinct pending state from target-rebind or navigation recovery. Cancelling or failing credential selection/registration must not start target reselection. Provide explicit retry of credential selection using the already confirmed target, or explicit discard of the pending operation. Timer polling must not repeatedly reopen credential dialogs. Clear the credential-pending state on completion, discard, or scenario unload.
 
 If an existing credential reference is selected but missing required keys at playback/validation time, FlowTape reports an unresolved credential error rather than guessing another group/key.
 

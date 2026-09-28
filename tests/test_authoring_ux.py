@@ -251,8 +251,10 @@ def test_credential_management_without_scenario(window,tmp_path):
     assert not (tmp_path/'scenario.yaml').exists()
 
 
+@pytest.mark.parametrize('existing_group',[False,True])
+@pytest.mark.parametrize('credential_username',[None,'','   ','shared-user'])
 @pytest.mark.parametrize('decision',[QMessageBox.StandardButton.Yes,QMessageBox.StandardButton.No])
-def test_recorded_secret_step_and_explicit_pairing(window,tmp_path,decision):
+def test_recorded_secret_step_and_explicit_pairing(window,tmp_path,decision,credential_username,existing_group):
     from types import SimpleNamespace
     configure(window,tmp_path)
     window.create_scenario('Recorded',tmp_path/'package')
@@ -271,19 +273,31 @@ def test_recorded_secret_step_and_explicit_pairing(window,tmp_path,decision):
         def _candidate(self,*args):return [SimpleNamespace(id='password')]
         def target(self,name):return SimpleNamespace(id='username')
     definition={'kind':'input','locate':[{'by':'id','value':'password'}]}
+    def select(dialog):
+        if existing_group or credential_username is None:
+            return select_existing(dialog)
+        dialog.new.setChecked(True)
+        dialog.name.setText('社内SSO');dialog.username.setText(credential_username);dialog.password.setText('shared-password')
+        dialog.validate();return dialog.result()
+    if existing_group or credential_username is None:
+        entry={'password':'shared-password'}
+        if credential_username is not None:entry['username']=credential_username
+        CredentialStore(window.config['credentials']['path']).save({'version':1,'credentials':{'社内SSO':entry}})
     with patch('flowtape.ui.Resolver',Resolver),patch('flowtape.ui.propose_target',return_value=definition), \
          patch.object(window,'_page',return_value='local'),patch('flowtape.ui.QInputDialog.getText',return_value=('パスワード',True)), \
-         patch.object(CredentialSelectionDialog,'exec',register_new),patch('flowtape.ui.QMessageBox.question',return_value=decision):
+         patch.object(CredentialSelectionDialog,'exec',select),patch('flowtape.ui.QMessageBox.question',return_value=decision) as pairing:
         window._operation(op)
+    assert pairing.call_count==(1 if credential_username and credential_username.strip() else 0)
     assert window.pending_operation is None
     assert window.scenario['steps'][1]['value']=='${credential.社内SSO.password}'
-    assert window.scenario['steps'][0]['value']==('${credential.社内SSO.username}' if decision==QMessageBox.StandardButton.Yes else 'recorded-user')
+    assert window.scenario['steps'][0]['value']==('${credential.社内SSO.username}' if decision==QMessageBox.StandardButton.Yes and credential_username and credential_username.strip() else 'recorded-user')
     assert window.save()
     assert 'shared-password' not in window.scenario_path.read_text()
     assert not (window.scenario_path.parent/'credentials.yaml').exists()
 
 
-def test_cancelled_secret_operation_stays_pending(window,tmp_path):
+@pytest.mark.parametrize('failure',[False,True])
+def test_cancelled_secret_operation_stays_pending(window,tmp_path,failure):
     from types import SimpleNamespace
     configure(window,tmp_path);window.create_scenario('Pending',tmp_path/'package')
     window.registry={'version':1,'pages':{'local':{'identify':{'url':{'equals':'http://local'}},'elements':{}}}}
@@ -293,13 +307,34 @@ def test_cancelled_secret_operation_stays_pending(window,tmp_path):
     with patch('flowtape.ui.Resolver',return_value=resolver), \
          patch('flowtape.ui.propose_target',return_value={'kind':'input','locate':[{'by':'id','value':'password'}]}), \
          patch.object(window,'_page',return_value='local'),patch('flowtape.ui.QInputDialog.getText',return_value=('パスワード',True)), \
-         patch.object(CredentialSelectionDialog,'exec',return_value=QDialog.DialogCode.Rejected):
+         patch.object(CredentialSelectionDialog,'exec',register_new if failure else lambda dialog: QDialog.DialogCode.Rejected), \
+         patch('flowtape.environment.os.replace',side_effect=OSError('secret')),patch('flowtape.ui.QMessageBox.warning'):
         window._operation(op)
     assert window.pending_operation is op
     assert window.scenario['steps']==[] and not window.recording
     assert window.registry['pages']['local']['elements']=={}
+    assert window.pending_credential is not None
+    window.transport.reset_mock()
+    for _ in range(3): window._poll_events()
+    assert not window.picking
+    window.transport.inject.assert_not_called()
+    window.transport.drain.assert_not_called()
+    with patch.object(CredentialSelectionDialog,'exec',return_value=QDialog.DialogCode.Rejected):
+        window.retry_credential()
+    assert window.pending_operation is op and window.pending_credential is not None
+    window._poll_events()
+    assert not window.picking
+    with patch.object(CredentialSelectionDialog,'exec',register_new), \
+         patch('flowtape.ui.propose_target') as propose,patch('flowtape.ui.QInputDialog.getText') as target:
+        window.retry_credential()
+    propose.assert_not_called();target.assert_not_called()
+    assert window.pending_operation is None and window.pending_credential is None
+    assert window.scenario['steps'][0]['value']=='${credential.社内SSO.password}'
     assert window.save()
-    assert 'password' not in window.scenario_path.read_text()
+    assert 'shared-password' not in window.scenario_path.read_text()
+    window.pending_operation=op;window.pending_credential=(op,'local','パスワード',{})
+    with patch('flowtape.ui.QMessageBox.question',return_value=QMessageBox.StandardButton.Yes):window.discard_pending()
+    assert window.pending_operation is None and window.pending_credential is None
 
 
 def test_missing_credential_key_does_not_guess(window,tmp_path):
@@ -335,3 +370,41 @@ def test_update_cancelled_and_deleted_group_keeps_scenario(window,tmp_path):
     with patch('flowtape.desktop_dialogs.QMessageBox.question',return_value=QMessageBox.StandardButton.Yes):manager.remove()
     assert window.scenario==scenario
     manager.reject()
+
+
+def test_first_use_nested_environment_directories(window,tmp_path):
+    destination=tmp_path/'new'/'nested'/'settings'/'config.yaml'
+    credentials=tmp_path/'separate'/'nested'/'secrets'/'credentials.yaml'
+    assert not destination.parent.exists() and not credentials.parent.exists()
+    document=config_data(tmp_path);document['credentials']['path']=str(credentials)
+    assert window.save_configuration(destination,document,None)
+    assert schema.config(schema.load_yaml(destination),destination)==window.config
+    assert not credentials.parent.exists()
+    store=CredentialStore(credentials);store.add('SSO','user','password')
+    assert CredentialStore(credentials).groups=={'SSO':{'username':'user','password':'password'}}
+    if os.name!='nt':assert credentials.stat().st_mode & 0o777==0o600
+
+
+def test_parent_creation_failure_is_sanitized(window,tmp_path):
+    destination=tmp_path/'missing'/'config.yaml'
+    with patch('flowtape.environment.Path.mkdir',side_effect=OSError('sensitive-detail')),patch('flowtape.ui.QMessageBox.warning') as warning:
+        assert not window.save_configuration(destination,config_data(tmp_path),None)
+    assert window.config is None and not destination.exists()
+    assert 'sensitive-detail' not in str(warning.call_args)
+    store=CredentialStore(tmp_path/'missing'/'credentials.yaml')
+    with patch('flowtape.environment.Path.mkdir',side_effect=OSError('sensitive-detail')):
+        with pytest.raises(EnvironmentStoreError) as error:store.add('SSO','user','secret')
+    assert 'sensitive-detail' not in str(error.value) and store.groups=={}
+
+
+def test_navigation_pending_still_starts_target_recovery(window,tmp_path):
+    window.create_scenario('Navigation',tmp_path/'package')
+    window.pending_operation=Operation('click',url='http://local/original')
+    window.driver=Mock();window.driver.current_url='http://local/next';window.transport=Mock()
+    window.transport.drain.return_value=[]
+    window._poll_events()
+    window.transport.inject.assert_not_called()
+    window.driver.current_url='http://local/original'
+    window._poll_events()
+    assert window.picking
+    window.transport.inject.assert_called_once_with('rebind')

@@ -50,6 +50,11 @@ def main():
                     dialog.reject()
             QTimer.singleShot(0,answer)
         def setup(dialog):
+            config_path=folder/'fresh'/'settings'/'config.yaml'
+            credential_path=folder/'fresh'/'secrets'/'credentials.yaml'
+            assert not config_path.parent.exists() and not credential_path.parent.exists()
+            dialog.source.setText(str(config_path))
+            dialog.edits['credentials','path'].setText(str(credential_path))
             dialog.edits['driver','path'].setText(str(Path(args.driver).resolve()))
             dialog.edits['paths','scenarios'].setText(str(folder/'scenarios'))
             app.processEvents();dialog.grab().save(str(artifacts/'settings.png'))
@@ -81,7 +86,7 @@ def main():
                 dialog.existing.setChecked(True)
                 dialog.groups.setCurrentText('共通SSO')
                 dialog.buttons.button(QDialogButtonBox.StandardButton.Ok).click()
-            def record(callback):
+            def record(callback,cancel_first=False):
                 window.start_record()
                 browser.find_element('id','username').clear()
                 browser.find_element('id','username').send_keys('typed-user')
@@ -102,9 +107,16 @@ def main():
                     # Schedule when the password operation is reached, after ID capture.
                     original=window.resolve_secret_input
                     def resolve():
-                        answer_dialog(CredentialSelectionDialog,callback)
+                        answer_dialog(CredentialSelectionDialog,(lambda dialog: dialog.reject()) if cancel_first else callback)
                         return original()
                     with patch.object(window,'resolve_secret_input',resolve):window._process_operations()
+                    if cancel_first:
+                        assert window.pending_credential is not None and not window.picking
+                        for _ in range(3):window._poll_events()
+                        assert not window.picking
+                        answer_dialog(CredentialSelectionDialog,callback)
+                        window.retry_credential()
+                        checks.append('cancelled credential selection stays pending without target reselection; explicit retry succeeds')
                 assert not errors and window.pending_operation is None and window.recorder_error is None
                 assert [node['value'] for node in window.scenario['steps'] if node['action']=='input']==[
                     '${credential.共通SSO.username}','${credential.共通SSO.password}']
@@ -112,7 +124,7 @@ def main():
                 package_text=window.scenario_path.read_text(encoding='utf-8')
                 assert 'typed-password-not-captured' not in package_text and 'registered-secret' not in package_text
                 assert not (window.scenario_path.parent/'credentials.yaml').exists()
-            record(choose_new)
+            record(choose_new,cancel_first=True)
             credential_path=Path(window.config['credentials']['path'])
             original=credential_path.read_bytes()
             assert CredentialStore(credential_path).groups['共通SSO']['password']=='registered-secret'

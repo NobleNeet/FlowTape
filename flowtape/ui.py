@@ -76,6 +76,7 @@ class FlowTapeWindow(QMainWindow):
         self.picking = False
         self.collection_picking = False
         self.pending_operation = None
+        self.pending_credential = None
         self.operation_queue = []
         self.input_evidence = {}
         self.recorder_error = None
@@ -112,7 +113,7 @@ class FlowTapeWindow(QMainWindow):
         toolbar = QToolBar('編集', self)
         self.addToolBar(toolbar)
         for label, method in (("ブラウザ", self.open_browser), ("URLを開く", self.open_url),
-                              ("記録開始", self.start_record), ("選択後に記録", self.start_insertion_record), ("記録停止", self.stop_record), ("記録保留を破棄", self.discard_pending),
+                              ("記録開始", self.start_record), ("選択後に記録", self.start_insertion_record), ("記録停止", self.stop_record), ("認証情報の選択を再試行", self.retry_credential), ("記録保留を破棄", self.discard_pending),
                               ("選択", self.start_pick), ("collection 選択", self.start_collection_pick), ("条件で囲む", self.wrap_if), ("else へ移す",self.move_to_else),
                               ("繰り返し", self.wrap_repeat), ("while", self.wrap_while), ("for_each", self.wrap_for_each),
                               ("追加", self.add_step), ("read", self.author_read), ("append", self.author_append), ("outputs", self.edit_outputs),
@@ -386,6 +387,7 @@ class FlowTapeWindow(QMainWindow):
                 self.status.setText('記録のリセットに失敗しました: '+str(exc))
                 return False
             self.pending_operation = None
+            self.pending_credential = None
             self.operation_queue.clear()
             self.recorder_error = None
         if include_unsaved and self.dirty:
@@ -408,7 +410,7 @@ class FlowTapeWindow(QMainWindow):
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.recording = self.picking = self.collection_picking = False
-        self.pending_operation = self.record_position = self.binding_name = self.pending_read = None
+        self.pending_operation = self.pending_credential = self.record_position = self.binding_name = self.pending_read = None
         self.operation_queue.clear()
         self.input_evidence.clear()
         self.recorder_error = None
@@ -953,6 +955,7 @@ class FlowTapeWindow(QMainWindow):
             if QMessageBox.question(self,'記録の同期回復','不確かな区間の未確定イベントを破棄し、新しい記録境界から開始しますか？') != QMessageBox.StandardButton.Yes: return
             self.transport.reset()
             self.pending_operation=None
+            self.pending_credential=None
             self.operation_queue.clear()
             self.recorder_error=None
         if self.pending_operation or self.operation_queue:
@@ -992,6 +995,7 @@ class FlowTapeWindow(QMainWindow):
         if not self.pending_operation and not self.operation_queue and not self.recorder_error: return
         if QMessageBox.question(self,'未確定の記録','未確定の操作を破棄しますか？') != QMessageBox.StandardButton.Yes: return
         self.pending_operation = None
+        self.pending_credential = None
         self.operation_queue.clear()
         self.record_position = None
         if self.recorder_error:
@@ -1069,7 +1073,7 @@ class FlowTapeWindow(QMainWindow):
         changed = self._mtimes()
         if changed != self.saved_mtimes and changed != self.deferred_mtimes:
             self.reconcile_external()
-        if self.pending_operation and not self.picking and self.driver and self.driver.current_url == self.pending_operation.url:
+        if self.pending_operation and self.pending_credential is None and not self.picking and self.driver and self.driver.current_url == self.pending_operation.url:
             self.picking = True
             self.transport.inject('rebind')
             self.status.setText('遷移前に操作した対象を再選択してください。元の操作へ紐付けます')
@@ -1172,7 +1176,7 @@ class FlowTapeWindow(QMainWindow):
                 self.collection_picking = False
                 self._collection_operation(op)
                 return
-            if self.pending_operation and self.pending_operation.url == op.url:
+            if self.pending_operation and self.pending_credential is None and self.pending_operation.url == op.url:
                 original = self.pending_operation
                 self.pending_operation = None
                 original.snapshot, original.context = op.snapshot, op.context
@@ -1268,12 +1272,23 @@ class FlowTapeWindow(QMainWindow):
             except Exception:
                 if QMessageBox.question(self, "Target", "既存 target を再登録しますか？") != QMessageBox.StandardButton.Yes:
                     return
+        self._commit_recorded_operation(op, page_id, name, definition)
+
+    @recorder_boundary
+    def retry_credential(self):
+        if self.pending_credential is None: return
+        op, page_id, name, definition = self.pending_credential
+        self._commit_recorded_operation(op, page_id, name, definition)
+        if self.pending_credential is None: self._process_operations()
+
+    def _commit_recorded_operation(self, op, page_id, name, definition):
         trial, registry = copy.deepcopy(self.scenario), copy.deepcopy(self.registry)
         registry['pages'][page_id].setdefault('elements',{})[name] = definition
         if op.action != "pick":
             node = {"action": op.action, "target": name, "_meta": {"id": ulid()}}
             if op.action in {"input", "select"}:
                 if op.data and op.data.get("secret"):
+                    self.pending_credential=(op,page_id,name,copy.deepcopy(definition))
                     selection=self.resolve_secret_input()
                     if selection is None:
                         self.recording=False
@@ -1285,7 +1300,7 @@ class FlowTapeWindow(QMainWindow):
                     preceding=sequences(trial)[self.record_position[0]] if self.record_position else trial['steps']
                     insertion=self.record_position[1] if self.record_position else len(preceding)
                     username=username_candidate(preceding,insertion,self.input_evidence,op)
-                    if username is not None and 'username' in entry:
+                    if username is not None and isinstance(entry.get('username'), str) and entry['username'].strip():
                         if QMessageBox.question(self,'ユーザーIDとの関連',
                             f'直前の入力「{username["target"]}」にも {group}.username を使用しますか？')==QMessageBox.StandardButton.Yes:
                             username['value']=credential_reference(group,'username')
@@ -1300,7 +1315,9 @@ class FlowTapeWindow(QMainWindow):
             self.input_evidence[node['_meta']['id']]=InputEvidence(op,name,op.value)
         if op.action != 'pick' and self.record_position:
             self.record_position = (key,index+1)
-        if self.pending_operation is op: self.pending_operation = None
+        if self.pending_operation is op:
+            self.pending_operation = None
+            self.pending_credential = None
         if op.action=='pick' and self.pending_read:
             node, self.pending_read = self.pending_read, None
             self._insert_node(dict(node,target=name))

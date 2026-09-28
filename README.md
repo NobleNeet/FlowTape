@@ -87,4 +87,4 @@ Linux 配布物は `dist/FlowTape/FlowTape` です。Windows 用の配布物は 
 
 スモーク確認は画面表示ありの Edge とローカル HTTP fixture を使い、`build/desktop-smoke/` に画面と結果を保存します。仕様照合結果と未確認事項は [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) を参照してください。
 
-`smoke_authoring.py` は実際の Qt 設定／New／認証選択ダイアログと headed Edge で、YAML を手書きしない初回設定、登録、別シナリオでの再利用、再生、安全な終了を確認します。結果と設定／New 画面は `build/authoring-smoke/` に保存します。
+`smoke_authoring.py` は実際の Qt 設定／New／認証選択ダイアログと headed Edge で、未作成の保存先への初回設定・登録、認証選択のキャンセルと対象を再選択しない再試行、別シナリオでの再利用、再生、安全な終了を確認します。認証待ちはツールバーの「認証情報の選択を再試行」で再開できます。結果と設定／New 画面は `build/authoring-smoke/` に保存します。
