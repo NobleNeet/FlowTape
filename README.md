@@ -39,8 +39,8 @@ CLI 再生は `scenario.yaml` の `mode` に従います。画面では `実行`
 
 ### アプリ起動とシナリオの切り替え
 
-- 起動時に Edge の起動を試みます。設定がない場合やブラウザ起動に失敗した場合も、シナリオ作成・読込・編集・保存ができます。「設定」で外部 `config.yaml` を選び、「ブラウザを起動／再試行」で復旧できます。
-- ファイルメニューから新規・開く・閉じる・保存・終了を操作できます。新規作成は既存のフォルダーを上書き・併合しません。
+- 起動時に Edge の起動を試みます。設定がない場合やブラウザ起動に失敗した場合も、シナリオ作成・読込・編集・保存ができます。「初回設定／アプリ設定を作成・編集」で Edge／外部 WebDriver／各保存先／待機時間などを指定して config を作成できます。「設定」メニューから既存 config の選択もできます。WebDriver の自動取得は行いません。
+- ファイルメニューから新規・開く・閉じる・保存・終了を操作できます。新規作成では名前と親フォルダーを指定し、作成先パッケージを事前に確認します。既存のフォルダーを上書き・併合しません。開く操作の主対象はパッケージフォルダーです（CLI／最近の項目では scenario.yaml も扱えます）。
 - 切り替え・閉じる・終了時には記録／再生を停止するか確認し、未確定記録の破棄、未保存変更の保存／破棄／キャンセルを明示的に選択します。保存が失敗した場合は切り替えません。
 - 「シナリオを閉じる」はブラウザを維持して開始画面へ戻ります。新規／別パッケージを開いてもブラウザ状態は継続し、再生進行・undo・記録の挿入位置などは引き継ぎません。
 - 最近のシナリオ（最大10件）と設定ファイルのパスは Qt のユーザー用 AppConfigLocation 配下の `FlowTape/preferences.json` に保存します。シナリオ YAML や credential 値はここへ保存しません。最近の項目も開くたびに検証し、存在しない項目は確認して削除できます。
@@ -48,7 +48,7 @@ CLI 再生は `scenario.yaml` の `mode` に従います。画面では `実行`
 
 ### Recorder / Editor
 
-- Edge のクリック、入力、select、キーボード操作を記録します。パスワード値は取得せず、credential 参照を指定します。
+- Edge のクリック、入力、select、キーボード操作を記録します。パスワード値は取得せず、既存 credential グループ／キーの選択または新規グループの明示登録で参照を作ります。新規登録では GUI でパスワードを再入力します。
 - picker / bind / rebind では対象操作を抑止し、同じ採取要素に一意に戻れる locator を検証します。既存 target が同じ要素を表す場合は再利用します。
 - collection picker は代表行から集合候補を作り、件数・例・ハイライトを確認して登録します。
 - ネストした範囲を `if` / `repeat` / `while` / `for_each` で囲み、else への移動、解除、移動、undo / redo ができます。
@@ -59,6 +59,14 @@ CLI 再生は `scenario.yaml` の `mode` に従います。画面では `実行`
 保存途中のプロセス終了は package 内の `.flowtape-save.json` で検出します。パッケージを開くときの選択、または `flowtape recover /path/to/package --choice rollback` / `--choice complete` で、保存前へ戻すか保存を完了するか明示的に決めます。未復旧の package は実行しません。
 
 同じ package の同時保存は writer lock で拒否します。run の診断は `paths.logs` 配下へ `logging.level` に従って保存します。展開済みの入力値・取得値は記録せず、credential 値は redaction します。
+
+### 共有認証情報
+
+「設定 → 共有認証情報を管理」はシナリオなしでも利用できます。グループ名の一覧、追加、明示的な更新、確認付き削除を提供します。既存値をフォームへ表示せず、入力欄は masked 表示です。更新時の空欄は変更なしとして扱います。任意の既存キーも更新できます。
+
+認証情報はアプリ設定の `credentials.path` にだけ保存し、複数シナリオで再利用します。記録中に違う値を入力しても、選んだ既存グループを上書きしません。関連が確認できる直前の ID 入力についてのみ、同じグループの username 参照へ変更するか確認します。キャンセルや保存失敗では password 操作を未確定のまま保持します。
+
+config／credential 保存は外部変更・writer 競合を検出し、一時ファイルからの置換で行います。認証情報の一時ファイルと保存ファイルは Linux では user-only permission です。v1 の認証情報はディスク上では平文なので、保存先のアクセス権・運用ポリシーで保護してください。削除・更新でシナリオの参照を黙って書き換えません。
 
 ### Player
 
@@ -72,8 +80,11 @@ CLI 再生は `scenario.yaml` の `mode` に従います。画面では `実行`
 .venv/bin/python -m pip install -e '.[ui,test,build]'
 .venv/bin/pyinstaller FlowTape.spec
 .venv/bin/python scripts/smoke_desktop.py --driver /absolute/path/to/msedgedriver --executable dist/FlowTape/FlowTape
+.venv/bin/python scripts/smoke_authoring.py --driver /absolute/path/to/msedgedriver
 ```
 
 Linux 配布物は `dist/FlowTape/FlowTape` です。Windows 用の配布物は Windows 上で同じ spec からビルドしてください。ユーザーの YAML・設定・WebDriver は配布物の外部に置きます。
 
 スモーク確認は画面表示ありの Edge とローカル HTTP fixture を使い、`build/desktop-smoke/` に画面と結果を保存します。仕様照合結果と未確認事項は [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) を参照してください。
+
+`smoke_authoring.py` は実際の Qt 設定／New／認証選択ダイアログと headed Edge で、YAML を手書きしない初回設定、登録、別シナリオでの再利用、再生、安全な終了を確認します。結果と設定／New 画面は `build/authoring-smoke/` に保存します。

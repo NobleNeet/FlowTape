@@ -1,6 +1,6 @@
 # FlowTape v1 実装・仕様照合
 
-`AGENTS.md` と `docs/00`〜`12` を基準とした実装監査です。アプリの起動・シナリオのライフサイクルは `12` に従い、`03` / `06` の関連記述と README を更新しました。
+`AGENTS.md` と `docs/00`〜`13` を基準とした実装監査です。アプリの起動・シナリオのライフサイクルは `12` に従い、`03` / `06` / `08` の関連記述と README を更新しました。
 
 ## 実装範囲
 
@@ -21,6 +21,7 @@
 
 ## 検証
 
+- docs/13 対応後の最終 pytest: **82 passed in 73.94s**。既存64件と authoring UX 18件を含み、失敗・skip はありません。実画面で New の長いパス表示を修正した後の結果です。
 - Lifecycle 実装後の最終 pytest: **64 passed in 43.91s**。既存43件と Lifecycle 21件を含み、失敗・skip はありません。
 - 初期実装の pytest: **43 passed in 63.43s**。schema、semantic locator、曖昧・ゼロ件、frame / shadow、Recorder、loops、outputs、taint、UI 編集、再生カーソル、window tracking、保存 failure / 中断復旧、writer 競合、診断 log を検証。
 - Edge 154.0.4258.37 と対応する user-cache WebDriver を使用。HTTP fixture は VM 内の `127.0.0.1` / `localhost` のみ。別オリジンと OOP iframe を含む。
@@ -49,6 +50,26 @@
 
 Lifecycle 実装後の headed desktop smoke は8項目すべて成功しました。開始画面は `build/desktop-smoke/start.png` で実際の表示と command 無効状態を確認。Linux 配布物を再ビルドし、シナリオ引数なし・不存在 WebDriver での GUI 継続、外部 package の CLI 再生、Recorder の capture / 再解決を確認しました。テスト用 preferences は一時ディレクトリへ隔離しています。
 
+## Desktop onboarding / Credential Authoring の仕様照合
+
+`docs/13-credential-and-authoring-ux.md` に従い、既存の Lifecycle / Recorder / Player を維持して次の UX を追加しました。
+
+| 仕様の節 | 実装・確認根拠 |
+|---|---|
+| 1, 2: 初回設定 | 開始画面／設定メニューから config を作成・更新。Edge / profile / 外部 WebDriver、scenario / log / download / output / credential の保存先、timeouts / loops / playback / logging / safety を編集。schema validation、restart と activity の確認後に明示保存。失敗時は active config と元ファイルを保持。設定画面テストと実 Qt / Edge の初回起動 |
+| 3, 4: New / Open UX | New は名前＋親フォルダー、作成先は read-only・コピー／scroll 可能な preview。Open の主選択は package directory。既存の作成・validation / recovery を再利用。New / menu / path preview テストと実画面 |
+| 5, 6, 10, 13: 共有 credential と参照 | `CredentialStore` は config の credentials.path だけを使用。グループは page / scenario と独立。既存 DSL namespace を使用し、新しい表現や scenario-local credentials は作らない。既存 YAML の任意キーと文字列値を維持。二つの実シナリオによる共有・再利用・再生 |
+| 7, 14: secret boundary | observer の password capture 規則は維持。登録値は application 側の masked fields で再入力。既存値は UI field に表示しない。browser RawCaptureEvent、scenario、run log に password がないことを実 Edge / pytest で確認。taint / output の既存テストも回帰確認 |
+| 8: selection / registration | 既存グループ・キーの combo または新規グループ登録を提供。既存値を記録入力で上書きしない。新規名 collision 拒否、保存 failure / changed file / writer conflict では finalize しない。参照のみ生成。store / selector / step tests と実 Qt dialog |
+| 9: username pairing | 直前の録画済み input の transient evidence、document / URL / window / frame、login naming / autocomplete / form を確認。search・異なる form / document・手編集済み Step 等は候補にしない。必ず Yes / No で確認し、No は literal を保持。pairing tests と実 Edge |
+| 11: management | scenario なしでも共有グループ一覧、追加、既存キーの明示更新、warning 付き削除。フォームへ既存値を入れず、空欄は変更なし、キャンセル／終了時に入力欄を消去。Scenario references は自動変更しない。管理 UI / update cancellation / removal tests |
+| 12: failure / cancellation | secret selection のキャンセル・登録 failure は pending 操作を保持し、空または literal password Step を作らない。missing group/key は既存 Player の unresolved credential error。cancel / persistence failure / missing-key tests |
+| 15: boundaries | config editor、atomic environment persistence、CredentialStore、selection / registration dialogs、transient pairing、scenario reference insertion を別 module / operations に分離 |
+
+Credential / config は single-file atomic replacement と既存 kernel writer lock による保存です。保存前の bytes を比較して外部変更を拒否し、secret を含む error payload / backup / recovery journal を作りません。Linux では tempfile と置換後のファイルが `0600`。Windows の権限は既存の OS policy に従い、Windows 実機では未検証です。
+
+`tests/test_authoring_ux.py` と更新した lifecycle tests、および `scripts/smoke_authoring.py` で検証。headed Edge と実 Qt Settings / New / credential dialogs による 5 項目は正常終了しました。既存 desktop / frozen CLI / Recorder smoke の8項目も通過。Qt の終了時に native widget cleanup の異常が一度再現したため、main window を close 時に破棄し、smoke では deferred deletion を application cleanup 前に処理するよう修正。修正後の authoring smoke は終了コード0です。
+
 ## 未確認事項・残課題
 
 1. **Windows 11** の実機、Windows 用 PyInstaller build、Windows のファイル永続化・Edge / WebDriver 起動・画面配置。Linux build が Windows build の検証を代替するわけではない。
@@ -67,3 +88,5 @@ Python 依存関係は `.venv` に導入しました。sudo / su / root / OS pac
 実装報告後、ユーザーから今回の変更の commit / push を明示的に指示されました。この指示を今回の GitHub push の許可として扱います。ビルド成果物、仮想環境、Python 配布パッケージ、キャッシュ、実行時データは `.gitignore` で除外します。
 
 その後の Lifecycle 実装では VM 内のソース変更・検証だけを実施しました。検証結果の報告後、ユーザーから Lifecycle 変更の commit / push も明示的に指示されました。この追加指示を今回の push の許可として扱います。PR・Issue・Release 操作は実施していません。
+
+今回の docs/13 対応の開発・検証中は VM 内のソース変更・検証だけを実施しました。検証結果の報告後、ユーザーから今回の commit / push と、今後も実装・テスト成功後の作業完了時に commit / push することを明示的に指示されました。この継続的な許可を `AGENTS.md` と `docs/11-development-environment.md` に記録しました。PR・Issue・Release 操作、権限昇格、OS パッケージ追加は行っていません。

@@ -130,6 +130,7 @@ Do not bake user scenarios or environment-specific paths into packaged code.
 
 ## Implementation discipline
 
+- When implementation is complete and its tests pass, commit the source, tests, and documentation and push to the configured project remote for review, as explicitly authorized by the user. Exclude build artifacts, virtual environments, installed Python packages, and runtime secrets. This standing authorization does not cover GitHub PR, Issue, Release, or other external service changes; see `11-development-environment.md`.
 - Prefer small modules with explicit boundaries between capture, scenario model, target registry, resolution, execution, and UI.
 - Keep serialization models versioned.
 - Preserve backwards compatibility deliberately; do not silently reinterpret existing YAML.

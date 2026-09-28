@@ -162,7 +162,7 @@ Local Git commits are allowed.
 
 The VM is the boundary within which changes are permitted.
 
-Development agents must not intentionally modify state outside the VM, except for the explicitly approved, non-destructive web test interactions described later in this document.
+Development agents must not intentionally modify state outside the VM, except for the explicitly approved, non-destructive web test interactions described later in this document and the project Git push authorization below.
 
 The following are forbidden:
 
@@ -175,20 +175,24 @@ The following are forbidden:
 - changing cloud infrastructure or external service configuration
 - modifying production systems
 - making persistent changes to unrelated third-party services
-- pushing changes to GitHub
+- pushing changes to GitHub outside the project Git push authorization below
 - creating or modifying GitHub Pull Requests
 - creating or modifying GitHub Issues
 - creating or modifying GitHub Releases
 - changing other remote repositories
 
-`git push` is explicitly forbidden.
+### Project Git push authorization
+
+The user has explicitly authorized committing and pushing completed project work to the configured project remote for review. Once implementation is complete and its tests pass, agents must commit and push the source, tests, and documentation without requesting confirmation again. Build artifacts, virtual environments, installed Python packages, and runtime secrets must remain excluded from Git.
+
+This standing authorization covers project commits and pushes only. GitHub Pull Request, Issue, Release, other remote repository, and unrelated external service changes remain forbidden. It does not permit root privileges or OS package installation.
 
 Network access itself is allowed. Reading documentation, downloading dependencies, fetching Git data, and exercising approved test sites are permitted.
 
 When uncertain, apply both of these rules:
 
 1. If the operation requires root or `sudo`, do not perform it.
-2. If the operation may modify state outside the VM, do not perform it unless this document explicitly allows that test interaction.
+2. If the operation may modify state outside the VM, do not perform it unless this document explicitly allows that test interaction or project Git push.
 
 ## Approved browser test sites
 

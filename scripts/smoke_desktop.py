@@ -12,6 +12,7 @@ from time import monotonic, sleep
 from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtCore import QCoreApplication, QEvent
 
 from flowtape.browser import Resolver
 from flowtape.recorder import propose_target
@@ -143,6 +144,7 @@ def main():
             window.dirty=False
             window.close()
             app.processEvents()
+            QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete)
             server.shutdown()
 
 

@@ -159,6 +159,6 @@ const FT = {
       }
       if(anchor) relations.push({relation,anchor});
     }
-    return {tag:el.localName, type:el.getAttribute('type'), role:this.role(el), name:this.name(el), label:this.label(el), text:this.norm(el.innerText || el.textContent).slice(0,200), visible:this.visible(el), enabled:this.enabled(el), editable:this.editable(el), relations, shadow_path:this.shadowPath(el), attributes:Object.fromEntries(['id','name','placeholder','data-testid','data-test','data-cy','data-qa','href','type','data-action','class'].filter(k=>el.hasAttribute(k)).map(k=>[k,el.getAttribute(k)]))};
+    return {tag:el.localName, type:el.getAttribute('type'), role:this.role(el), name:this.name(el), label:this.label(el), text:this.norm(el.innerText || el.textContent).slice(0,200), visible:this.visible(el), enabled:this.enabled(el), editable:this.editable(el), relations, shadow_path:this.shadowPath(el), attributes:Object.fromEntries(['id','name','placeholder','autocomplete','data-testid','data-test','data-cy','data-qa','href','type','data-action','class'].filter(k=>el.hasAttribute(k)).map(k=>[k,el.getAttribute(k)]))};
   }
 };

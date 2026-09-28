@@ -9,11 +9,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import yaml
-from PySide6.QtCore import QTimer, QStandardPaths
+from PySide6.QtCore import QTimer, QStandardPaths, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QInputDialog, QLabel,
     QListWidget, QMainWindow, QMessageBox, QPushButton, QSplitter, QTextEdit,
-    QVBoxLayout, QWidget, QComboBox, QToolBar, QFileDialog)
+    QVBoxLayout, QWidget, QComboBox, QToolBar, QFileDialog, QDialog)
 
 from . import schema
 from .browser import Resolver, open_edge, seconds
@@ -29,6 +29,10 @@ from .recorder import RecorderTransport, propose_target, propose_collections
 from .identity import ulid
 from .authoring import referenced_targets
 from .lifecycle import Preferences, create_package
+from .environment import CredentialStore, atomic_yaml, snapshot, credential_reference
+from .desktop_dialogs import (NewScenarioDialog, SettingsDialog, CredentialSelectionDialog,
+                              CredentialManagerDialog)
+from .login_authoring import InputEvidence, username_candidate
 
 
 def recorder_boundary(method):
@@ -52,6 +56,7 @@ def lifecycle_boundary(method):
 class FlowTapeWindow(QMainWindow):
     def __init__(self, scenario_path=None, config_path=None, *, preferences_path=None):
         super().__init__()
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         preferences_path = preferences_path or (Path(QStandardPaths.writableLocation(
             QStandardPaths.StandardLocation.AppConfigLocation)) / 'FlowTape' / 'preferences.json')
         self.preferences = Preferences(preferences_path)
@@ -72,6 +77,7 @@ class FlowTapeWindow(QMainWindow):
         self.collection_picking = False
         self.pending_operation = None
         self.operation_queue = []
+        self.input_evidence = {}
         self.recorder_error = None
         self.record_position = None
         self.binding_name = None
@@ -98,8 +104,11 @@ class FlowTapeWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, callback=method: callback())
             self.actions[label] = action
         self.recent_menu = file_menu.addMenu('最近のシナリオ')
-        settings_action = self.menuBar().addAction('設定')
-        settings_action.triggered.connect(self.choose_config)
+        settings_menu = self.menuBar().addMenu('設定')
+        for label, method in [('アプリ設定を作成・編集',self.edit_config),('既存 config.yaml を選択',self.choose_config),
+                              ('共有認証情報を管理',self.manage_credentials)]:
+            action = settings_menu.addAction(label)
+            action.triggered.connect(lambda checked=False, callback=method: callback())
         toolbar = QToolBar('編集', self)
         self.addToolBar(toolbar)
         for label, method in (("ブラウザ", self.open_browser), ("URLを開く", self.open_url),
@@ -154,6 +163,9 @@ class FlowTapeWindow(QMainWindow):
         self.start_view = QWidget()
         start_layout = QVBoxLayout(self.start_view)
         start_layout.addWidget(QLabel('シナリオが開かれていません'))
+        setup = QPushButton('初回設定／アプリ設定を作成・編集')
+        setup.clicked.connect(self.edit_config)
+        start_layout.addWidget(setup)
         for label, method in [('＋ 新規シナリオ', self.new_scenario), ('シナリオを開く', self.choose_scenario)]:
             button = QPushButton(label)
             button.clicked.connect(method)
@@ -237,23 +249,105 @@ class FlowTapeWindow(QMainWindow):
             QMessageBox.warning(self, '設定エラー', str(exc))
             return False
         if config == self.config and source == self.config_path and credentials == self.credentials: return True
-        restart_required = self.config is None or any(config[key] != self.config[key] for key in ('browser', 'driver')) or (
+        restart_required = self._config_restart_required(config)
+        if not self._config_boundary(restart_required): return False
+        self._install_config(source,config,credentials,restart_required)
+        return True
+
+    def _config_restart_required(self,config):
+        return self.config is None or any(config[key] != self.config[key] for key in ('browser','driver')) or (
             config['paths']['downloads'] != self.config['paths']['downloads'])
+
+    def _config_boundary(self,restart_required):
         if self.driver is not None and restart_required:
-            answer = QMessageBox.question(self, '設定の変更',
-                '設定の変更にはブラウザの再起動が必要です。現在のブラウザ状態を失います。再起動しますか？')
-            if answer != QMessageBox.StandardButton.Yes: return False
-        if not self.resolve_boundary(include_unsaved=False): return False
+            if QMessageBox.question(self,'設定の変更',
+                '設定の変更にはブラウザの再起動が必要です。現在のブラウザ状態を失います。再起動しますか？') != QMessageBox.StandardButton.Yes: return False
+        return self.resolve_boundary(include_unsaved=False)
+
+    def _install_config(self,source,config,credentials,restart_required):
         if restart_required: self.shutdown_browser()
         elif self.driver is not None:
             try: self.driver.set_page_load_timeout(seconds(config['timeouts']['page_load']))
             except Exception: self.shutdown_browser()
         self.controller = self.worker = None
-        self.config_path, self.config, self.credentials = source, config, credentials
+        self.config_path,self.config,self.credentials = source,config,credentials
         self.preferences.config_path = str(source)
         self.preferences.save()
         self.status.setText(self.preferences.error or 'アプリ設定を読み込みました')
-        return True
+
+    @lifecycle_boundary
+    def save_configuration(self,path,document,expected):
+        try:
+            source=Path(path).resolve()
+            persisted=copy.deepcopy(document)
+            config=schema.config(persisted,source)
+            credentials=CredentialStore(config['credentials']['path']).document
+            restart_required=self._config_restart_required(config)
+            if not self._config_boundary(restart_required): return False
+            # Persist only after the user permits any required restart/safe boundary.
+            atomic_yaml(source,persisted,expected)
+            self._install_config(source,config,credentials,restart_required)
+            self.status.setText(self.preferences.error or 'アプリ設定を保存しました')
+            return True
+        except Exception as exc:
+            QMessageBox.warning(self,'設定の保存',str(exc))
+            return False
+
+    def edit_config(self):
+        if self.lifecycle_busy: return
+        source=self.config_path or self.preferences.path.with_name('config.yaml')
+        try: dialog=SettingsDialog(self,source,self.config)
+        except Exception as exc:
+            QMessageBox.warning(self,'アプリ設定',str(exc));return
+        self.lifecycle_busy=True
+        try: accepted=dialog.exec()==QDialog.DialogCode.Accepted
+        finally:self.lifecycle_busy=False
+        if not accepted:return
+        source=Path(dialog.source.text()).resolve()
+        expected=dialog.original if source==dialog.loaded_source else snapshot(source)
+        if source!=dialog.loaded_source and expected is not None:
+            if QMessageBox.question(self,'設定の保存','選択した既存 config を更新しますか？')!=QMessageBox.StandardButton.Yes:return
+        if self.save_configuration(source,dialog.result_document,expected):self.open_browser()
+
+    @lifecycle_boundary
+    def manage_credentials(self):
+        if self.config is None:
+            self.status.setText('先にアプリ設定で共有 credentials.yaml の保存先を指定してください');return
+        if not self.resolve_boundary(include_unsaved=False):return
+        try:
+            store=CredentialStore(self.config['credentials']['path'])
+            dialog=CredentialManagerDialog(self,store)
+            dialog.exec()
+            self.credentials=store.document
+            # Updated store is used by the next fresh playback; never rewrite scenarios.
+            self.controller=self.worker=None
+        except Exception as exc:QMessageBox.warning(self,'認証情報',str(exc))
+
+    def resolve_secret_input(self):
+        if self.config is None:
+            self.status.setText('アプリ設定で共有認証情報の保存先を指定してください');return None
+        previous=self.processing_events
+        self.processing_events=True
+        dialog=None
+        try:
+            store=CredentialStore(self.config['credentials']['path'])
+            dialog=CredentialSelectionDialog(self,store)
+            if dialog.exec()!=QDialog.DialogCode.Accepted:return None
+            group,key=dialog.selection
+            if dialog.new.isChecked():
+                store.add(group,dialog.username.text(),dialog.password.text())
+            else:
+                store.reload()
+                if key not in store.groups.get(group,{}):
+                    raise FlowTapeError('認証情報のキーが見つかりません。選び直してください。')
+            reference=credential_reference(group,key)
+            self.credentials=store.document
+            return reference,group,store.groups[group]
+        except Exception as exc:
+            QMessageBox.warning(self,'認証情報',str(exc));return None
+        finally:
+            if dialog is not None:dialog.username.clear();dialog.password.clear()
+            self.processing_events=previous
 
     def choose_config(self):
         source, _ = QFileDialog.getOpenFileName(self, 'アプリ設定を選択',
@@ -316,6 +410,7 @@ class FlowTapeWindow(QMainWindow):
         self.recording = self.picking = self.collection_picking = False
         self.pending_operation = self.record_position = self.binding_name = self.pending_read = None
         self.operation_queue.clear()
+        self.input_evidence.clear()
         self.recorder_error = None
         self.confirmed_destructive = self.record_after_play = self.pending_close = False
         self.dirty = False
@@ -370,18 +465,18 @@ class FlowTapeWindow(QMainWindow):
             return False
 
     def choose_scenario(self):
-        source, _ = QFileDialog.getOpenFileName(self, 'シナリオを開く',
-            self.config['paths']['scenarios'] if self.config else str(Path.cwd()), 'Scenario (scenario.yaml)')
-        if source: self.open_scenario(source)
+        source=QFileDialog.getExistingDirectory(self,'シナリオパッケージを開く',
+            self.config['paths']['scenarios'] if self.config else str(Path.cwd()))
+        if source:self.open_scenario(source)
 
     def new_scenario(self):
-        name, ok = QInputDialog.getText(self, '新規シナリオ', 'シナリオ名')
-        if not ok or not name.strip(): return False
-        # Destination is selected as a full new package directory, never a merge.
-        source, _ = QFileDialog.getSaveFileName(self, '新しいパッケージの保存先（新規フォルダー名）',
-            str(Path(self.config['paths']['scenarios'] if self.config else Path.cwd()) / name))
-        if not source: return False
-        return self.create_scenario(name, source)
+        if self.lifecycle_busy:return
+        dialog=NewScenarioDialog(self,self.config['paths']['scenarios'] if self.config else Path.cwd())
+        self.lifecycle_busy=True
+        try:accepted=dialog.exec()==QDialog.DialogCode.Accepted
+        finally:self.lifecycle_busy=False
+        if accepted:return self.create_scenario(dialog.name.text().strip(),dialog.destination)
+        return False
 
     @lifecycle_boundary
     def create_scenario(self, name, destination):
@@ -1179,11 +1274,21 @@ class FlowTapeWindow(QMainWindow):
             node = {"action": op.action, "target": name, "_meta": {"id": ulid()}}
             if op.action in {"input", "select"}:
                 if op.data and op.data.get("secret"):
-                    ref, accepted = QInputDialog.getText(self, "認証情報", "${credential.グループ.キー} を指定")
-                    if not accepted or not schema.REFERENCE.fullmatch(ref) or not ref.startswith("${credential."):
-                        self.status.setText("パスワード Step は認証情報参照の指定待ち")
+                    selection=self.resolve_secret_input()
+                    if selection is None:
+                        self.recording=False
+                        self.transport.inject('observe')
+                        self.status.setText('パスワード操作は認証情報の選択／登録待ちです')
                         return
-                    node["value"] = ref
+                    ref,group,entry=selection
+                    node['value']=ref
+                    preceding=sequences(trial)[self.record_position[0]] if self.record_position else trial['steps']
+                    insertion=self.record_position[1] if self.record_position else len(preceding)
+                    username=username_candidate(preceding,insertion,self.input_evidence,op)
+                    if username is not None and 'username' in entry:
+                        if QMessageBox.question(self,'ユーザーIDとの関連',
+                            f'直前の入力「{username["target"]}」にも {group}.username を使用しますか？')==QMessageBox.StandardButton.Yes:
+                            username['value']=credential_reference(group,'username')
                 else:
                     node["value"] = op.value
             if self.record_position:
@@ -1191,6 +1296,8 @@ class FlowTapeWindow(QMainWindow):
                 sequences(trial)[key].insert(index,node)
             else: trial['steps'].append(node)
         if not self._commit_edit(trial,registry): return
+        if op.action=='input' and not (op.data or {}).get('secret'):
+            self.input_evidence[node['_meta']['id']]=InputEvidence(op,name,op.value)
         if op.action != 'pick' and self.record_position:
             self.record_position = (key,index+1)
         if self.pending_operation is op: self.pending_operation = None
@@ -1230,6 +1337,7 @@ class FlowTapeWindow(QMainWindow):
         schema.scenario(self.scenario)
         schema.validate_package(self.scenario, self.registry)
         self.confirmed_destructive = False
+        self.credentials=CredentialStore(self.config['credentials']['path']).document
         config = copy.deepcopy(self.config)
         config['playback']['observation_delay'] = self.pace_box.currentData() or '0s'
         self.controller = PlaybackController(Player(self.driver, self.scenario, self.registry, config, self.credentials))

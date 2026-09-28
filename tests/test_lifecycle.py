@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
 
 from flowtape import schema
 from flowtape.cli import main, package
@@ -325,13 +325,17 @@ def test_modal_switch_blocks_recorder_poll_and_nested_switch(window,tmp_path):
 
 
 def test_new_open_menu_commands(window,tmp_path):
-    with patch('flowtape.ui.QInputDialog.getText',return_value=('Created via menu',True)), \
-         patch('flowtape.ui.QFileDialog.getSaveFileName',return_value=(str(tmp_path/'menu'),'')):
+    from flowtape.desktop_dialogs import NewScenarioDialog
+    def accept(dialog):
+        dialog.name.setText('Created via menu')
+        dialog.directory.setText(str(tmp_path))
+        return QDialog.DialogCode.Accepted
+    with patch.object(NewScenarioDialog,'exec',accept):
         window.actions['新規シナリオ'].trigger()
     assert window.scenario['name']=='Created via menu'
     window.actions['シナリオを閉じる'].trigger()
     assert window.scenario is None
-    with patch('flowtape.ui.QFileDialog.getOpenFileName',return_value=(str(tmp_path/'menu'/'scenario.yaml'),'')):
+    with patch('flowtape.ui.QFileDialog.getExistingDirectory',return_value=str(tmp_path/'Created via menu')):
         window.actions['シナリオを開く'].trigger()
     assert window.scenario['name']=='Created via menu'
 

@@ -92,6 +92,8 @@ Conceptual appearance:
 
 When a password field has been recorded but no credential reference has yet been assigned, the UI should display an explicit unresolved/credential-required state rather than the captured plaintext value.
 
+The ordinary GUI resolution is group/key selection or explicit new-group registration, as defined in `13-credential-and-authoring-ux.md`; it does not require manually typing a reference string. A plausible preceding username input may be paired only after explicit confirmation. Cancellation or credential persistence failure keeps the secret operation pending without creating a literal/empty password step. The application-level Settings and credential manager work independently of an active scenario.
+
 Each row should expose the operation in human-readable terms rather than raw Selenium details.
 
 ## 5. Range selection and structural blocks

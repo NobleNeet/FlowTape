@@ -604,6 +604,8 @@ input:
 
 The Editor may create the input step and require the user to assign an explicit credential reference later.
 
+Application-side selection/registration and cancellation behavior follow `13-credential-and-authoring-ux.md`. The ordinary GUI does not finalize a password step until credential resolution succeeds; unresolved operations remain pending. New-group registration uses separately entered, masked application fields and never obtains the password from browser event data. Minimal `autocomplete` evidence may be captured to support conservative username pairing; it contains no input value.
+
 FlowTape must not automatically persist captured plaintext password values into scenario YAML, logs, diagnostics, crash recovery, or output files.
 
 ## 21. Select normalization

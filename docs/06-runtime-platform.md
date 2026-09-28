@@ -153,6 +153,8 @@ Relative paths other than `driver.path` are resolved relative to the directory c
 
 Runtime/environment settings should not be mixed into scenario YAML unless they directly change procedure semantics.
 
+The desktop Settings workflow can create/update this config without hand-written YAML (`13-credential-and-authoring-ux.md`). It exposes browser/profile/driver paths, scenario/log/download/output roots, credentials path, timeouts, loop limits, playback defaults, logging and destructive confirmation. The GUI validates the config and respects restart/recording/playback boundaries before saving; failure does not install the new configuration.
+
 ## 8. Credentials file
 
 IDs and passwords are stored separately in plaintext `credentials.yaml`.
@@ -187,6 +189,8 @@ Security rules:
 - a `credentials.example.yaml` placeholder may be committed
 
 Plaintext file storage means filesystem access to this file reveals the credentials. Protection is therefore delegated to placement, OS/file permissions, and corporate storage policy in v1.
+
+The shared application-level store can be managed from Settings or selected/extended during Recorder secret-input authoring (`13-credential-and-authoring-ux.md`). Existing group reuse never replaces values from captured browser input. Updates/removal are explicit and do not rewrite scenarios. Single-file saves validate the store, detect changed content/writer conflicts, stage a user-only temporary file, and atomically replace the destination; no credential values enter scenario save journals or recovery files.
 
 ## 9. Browser profile and session policy
 
