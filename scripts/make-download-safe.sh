@@ -11,3 +11,5 @@ done
 
 git commit -m "Generate download-safe branch"
 git push -u origin download-safe --force
+
+git switch main
