@@ -4,9 +4,11 @@ Status: specification
 
 This document defines the application/Recorder authoring UX for runtime configuration, scenario package selection/creation, and credential reuse/registration.
 
-It complements `03-recorder-ui.md`, `06-runtime-platform.md`, `07-data-schema.md`, `08-recorder-protocol.md`, and `12-application-scenario-lifecycle.md`.
+It complements `03-recorder-ui.md`, `06-runtime-platform.md`, `07-data-schema.md`, `08-recorder-protocol.md`, `12-application-scenario-lifecycle.md`, and `14-primary-user-flows-and-ui-hierarchy.md`.
 
 For subjects explicitly covered here, this document is the authoritative authoring-UX specification. Persisted field legality remains defined by `07-data-schema.md`, browser-side secret capture rules remain defined by `08-recorder-protocol.md`, and general application/scenario/browser lifetime remains defined by `12-application-scenario-lifecycle.md`.
+
+For first-run visual priority, guided Edge/WebDriver onboarding, primary New/Open labels, and progressive disclosure of advanced settings, `14-primary-user-flows-and-ui-hierarchy.md` is authoritative. The complete settings capabilities defined here must remain available, but they do not all need to appear in the first-use path.
 
 ## 1. Goals
 
@@ -35,7 +37,7 @@ The GUI must provide an application-level settings workflow capable of creating 
 
 Explicit saves create missing parent directories for the config or shared credential file. Directory-creation failures follow the same failure-aware persistence rules as file-write failures.
 
-At minimum the settings UI should expose:
+At minimum the complete application settings UI should expose:
 
 - Microsoft Edge executable when an explicit path is needed
 - externally managed `msedgedriver` absolute path
@@ -46,7 +48,7 @@ At minimum the settings UI should expose:
 - credentials file path
 - other runtime defaults already represented by the config schema where practical
 
-A representative first-use view is:
+A representative complete settings view is:
 
 ```text
 Browser settings
@@ -65,6 +67,8 @@ Credentials file:
 
 [Save]
 ```
+
+This complete editor is distinct from the preferred first-run guided setup. On first launch, when the immediate blocking problem is browser readiness, FlowTape should initially ask only for Edge/WebDriver information needed to establish a usable controlled browser, using reasonable defaults for other application paths/settings. The user can open the complete settings editor afterward. The guided flow and its visual hierarchy are defined by `14-primary-user-flows-and-ui-hierarchy.md`.
 
 FlowTape must not automatically download/provision WebDriver. A GUI path picker is only a way to point at an externally managed driver.
 
@@ -95,6 +99,8 @@ Package to create:
 
 [Create]
 ```
+
+The ordinary first-run/primary-flow entry point may use the task-oriented label `新しい操作を記録する`, and the creation button may use `作成して記録へ`, as defined by `14-primary-user-flows-and-ui-hierarchy.md`. These labels do not change the package lifecycle semantics below.
 
 The user is choosing a package directory, not a YAML file name.
 
