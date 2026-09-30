@@ -35,6 +35,8 @@ def open_edge(config: dict, *, headless: bool = False):
         options.add_argument("--headless=new")
     options.add_argument("--no-first-run")
     options.add_argument("--disable-default-apps")
+    options.add_argument("--ignore-certificate-errors")
+    options.set_capability("acceptInsecureCerts", True)
     if config["browser"]["executable"]:
         options.binary_location = config["browser"]["executable"]
     if config["browser"]["profile_path"]:
