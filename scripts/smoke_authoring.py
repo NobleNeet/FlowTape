@@ -12,7 +12,7 @@ from unittest.mock import patch
 from PySide6.QtCore import QTimer, QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox
 
-from flowtape.desktop_dialogs import SettingsDialog, NewScenarioDialog, CredentialSelectionDialog
+from flowtape.desktop_dialogs import SettingsDialog, NewScenarioDialog, CredentialSelectionDialog, PageRegistrationDialog
 from flowtape.environment import CredentialStore
 from flowtape.ui import FlowTapeWindow
 
@@ -101,7 +101,10 @@ def main():
                 window.operation_queue.extend(operations)
                 # Ordinary target/page confirmations are deterministic; credential dialog
                 # uses real radio/combo/masked widgets and the production persistence path.
-                with patch('flowtape.ui.QInputDialog.getText',side_effect=[('local',True),('ユーザーID',True),('パスワード',True),('ログイン',True)]), \
+                def register_page(dialog):
+                    dialog.name.setText('local');dialog.url.setText(url);dialog.match.setCurrentIndex(dialog.match.findData('equals'))
+                    dialog.validate();return dialog.result()
+                with patch.object(PageRegistrationDialog,'exec',register_page),patch('flowtape.ui.QInputDialog.getText',side_effect=[('ユーザーID',True),('パスワード',True),('ログイン',True)]), \
                      patch('flowtape.ui.QInputDialog.getMultiLineText',return_value=('url:\n  equals: '+url,True)), \
                      patch('flowtape.ui.QMessageBox.question',return_value=QMessageBox.StandardButton.Yes):
                     # Schedule when the password operation is reached, after ID capture.

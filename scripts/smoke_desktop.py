@@ -18,6 +18,7 @@ from flowtape.browser import Resolver
 from flowtape.recorder import propose_target
 from flowtape.schema import save_yaml
 from flowtape.ui import FlowTapeWindow
+from flowtape.desktop_dialogs import PageRegistrationDialog
 
 
 def main():
@@ -97,8 +98,11 @@ def main():
             assert window.driver is browser and browser.current_url == url
             assert window.create_scenario('新規記録', folder/'new-package')
             assert not window.recording and window.controller is None
+            def register_page(dialog):
+                dialog.name.setText('local');dialog.url.setText(url);dialog.match.setCurrentIndex(dialog.match.findData('equals'))
+                dialog.validate();return dialog.result()
             # Dialog responses only confirm names/identify; capture and resolution are real.
-            with patch('flowtape.ui.QInputDialog.getText', side_effect=[('local',True),('送信',True)]), \
+            with patch.object(PageRegistrationDialog,'exec',register_page),patch('flowtape.ui.QInputDialog.getText', return_value=('送信',True)), \
                  patch('flowtape.ui.QInputDialog.getMultiLineText', return_value=('url:\n  equals: '+url,True)), \
                  patch('flowtape.ui.QMessageBox.question', return_value=QMessageBox.StandardButton.Yes):
                 window.start_record()

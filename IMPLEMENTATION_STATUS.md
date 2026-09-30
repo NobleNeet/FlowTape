@@ -1,6 +1,6 @@
 # FlowTape v1 実装・仕様照合
 
-`AGENTS.md` と `docs/00`〜`13` を基準とした実装監査です。アプリの起動・シナリオのライフサイクルは `12` に従い、`03` / `06` / `08` の関連記述と README を更新しました。
+`AGENTS.md` と `docs/00`〜`14` を基準とした実装監査です。アプリの起動・シナリオのライフサイクルは `12` に従い、`03` / `06` / `08` の関連記述と README を更新しました。
 
 ## 実装範囲
 
@@ -21,6 +21,7 @@
 
 ## 検証
 
+- docs/14 GUI 再設計後の最終 pytest: **124 passed in 76.65s**。既存100件と GUI hierarchy 24件。失敗・skip なし。
 - docs/13 対応後の最終 pytest: **82 passed in 73.94s**。既存64件と authoring UX 18件を含み、失敗・skip はありません。実画面で New の長いパス表示を修正した後の結果です。
 - Lifecycle 実装後の最終 pytest: **64 passed in 43.91s**。既存43件と Lifecycle 21件を含み、失敗・skip はありません。
 - 初期実装の pytest: **43 passed in 63.43s**。schema、semantic locator、曖昧・ゼロ件、frame / shadow、Recorder、loops、outputs、taint、UI 編集、再生カーソル、window tracking、保存 failure / 中断復旧、writer 競合、診断 log を検証。
@@ -77,6 +78,33 @@ Credential / config は single-file atomic replacement と既存 kernel writer l
 - 認証待ちを target-rebind / navigation recovery と区別。キャンセル／登録失敗後は timer polling で対象再選択を開始せず、「認証情報の選択を再試行」で確認済み target のまま再試行。完了・破棄・scenario unload の境界で状態をクリア。通常の navigation recovery は維持。
 - 最終 pytest: **100 passed in 54.20s**。回帰テストには既存／新規の username 状態、確認 Yes / No、認証キャンセル・保存失敗・再キャンセル・再試行・破棄、navigation recovery を含む。
 - 更新した `scripts/smoke_authoring.py` を実 Qt / headed Edge / localhost で実行し **6項目成功、終了コード0**。未作成の独立した config / credential 親ディレクトリへの保存、実ダイアログのキャンセル、対象を再選択しない再試行、共有 credential 再利用と Player 再生、password 非漏洩を確認。結果は `build/authoring-smoke/report.json`（Git 対象外）。今回の修正後の配布物再ビルド・配布物での検証は未実施。
+
+## Primary user flows / UI hierarchy の仕様照合
+
+GUI の可視操作と主要フローは `docs/14-primary-user-flows-and-ui-hierarchy.md` に従います。古い操作インベントリを常設3列から主要1列へ整理し、既存機能は選択文脈・メニュー・専用ダイアログへ移しました。
+
+| 要件 | 実装・確認根拠 |
+|---|---|
+| 1, 2, 14: 通常画面の5操作と状態切替 | Record / Play / Continue / Save / More。録画では終了ボタン、再生では一時停止／停止、paused では再開、failure では再試行／スキップ／停止。`test_idle_surface_five_groups_and_advanced_features_reachable` と状態テスト。実画面の `07-check-next.png` / `10-auto-recording.png` |
+| 3: 再生メニュー | 通常／ゆっくり／1ステップずつ／選択位置まで。slow は既存 observation delay、single-step は1 ActionNode、selected-position は直前停止。実 Qt worker によるメニュー境界テストと既存 Player tests |
+| 4: 続きを記録 | 新しい cursor で先頭から末尾まで再生し、成功時だけ同じ Edge の状態から末尾へ録画。挿入位置をクリア、失敗／停止／startup failure では移行しない。Qt worker の成功・実失敗・停止・既存 paused cursor テストと実 flow B |
+| 5: 挿入 | Step 間の `＋`、先頭への追加。手動操作ダイアログ／ここから記録。実モデルの行番号・IDを変える偽Stepは作らない。nested insertion、manual-first insertion、gap click、pending insertion の保持を検証 |
+| 6, 7: 対象・構造 | 選択項目の右ペインに登録状態／ブラウザで指定・再指定／診断／名前変更。範囲の右クリックに条件・それ以外・回数・条件を満たす間・各対象・解除・上下移動。既存 editor / rename validation と action 到達性テスト |
+| 8: 高度な機能 | `⋯` に手動／YAML操作、read／append、outputs、未登録対象、picker／collection、undo／redo、保留認証、検証、再生設定。選択項目の YAML は明示的に展開し既存の適用を維持。全対象 action のメニュー到達性を検証 |
+| 9: 初回セットアップ | Edge 検出／指定 → 外部 WebDriver 指定 → 非同期接続テスト → 明示保存。テスト用一時 profile と `about:blank` のみ使用。変更すると接続成功を無効化、成功まで保存不能。schema defaults とユーザー用 data roots を生成。完全設定は設定メニューに維持。実 guided setup / Qt thread tests |
+| 10, 11, 12: 次操作の案内 | No Scenario に新規録画／既存を開く／最近の一覧。New は作成先 preview と「作成して記録へ」。空シナリオは明示的な record-ready（自動録画なし）、必要なら開始URLを開く。録画終了後は「動作確認する」を強調。実 flow A と start / New テスト |
+| 13: 状態 | シナリオ名と未保存表示、常設の小さな Edge 接続表示、録画／再生／一時停止／失敗・認証待ちの説明。接続不可では setup / retry と非ブラウザ編集を維持。既存 browser failure / retention / lifecycle tests |
+| 14〜17: 境界・互換性・検証 | `ui_surface.py` は可視コマンド／メニュー／Step描画、`browser_setup.py` はOS差を含む検出と guided setup、既存 `ui.py` は lifecycle / domain orchestration。schema、Recorder、DOM locator、Player / PlaybackController、credential store の実行・保存規則は変更なし。既存100件すべて回帰成功 |
+
+最終テストは **124 passed in 76.65s**。新しい `tests/test_ui_hierarchy.py` の24件は主要5操作、動的状態、先頭からの continuation と末尾保存、失敗時の非移行、挿入位置、初回設定の成功／失敗／キャンセル／変更、No Scenario・New、対象と高度な操作の配置、再生メニューの実行境界を検証します。UI / lifecycle / authoring group は **84 passed in 3.20s**。
+
+画面表示ありの Qt とインストール済み Edge 154.0.4258.37／明示指定の対応 driver、隔離した user profile、localhost fixture で検証しました。
+
+- `scripts/smoke_primary_flows.py`: **A / B の2フロー成功、終了コード0**。実 setup / connection / 保存、New、ページ登録、実ボタンから open / input / click 録画、終了、動作確認、保存。実 package chooser で再読込後、1操作で先頭から末尾まで再生→同じEdgeで自動録画→追加 input / click を末尾へ保存。YAMLの手書きやRecorder/Playerのmockは使用していません。GUIダイアログへの入力はQtで自動化しています。
+- `scripts/smoke_authoring.py`: **6項目成功、終了コード0**。共有credential登録・再利用・キャンセルからの再試行・Player解決・password非漏洩の回帰確認。
+- `scripts/smoke_desktop.py`: **5項目成功、終了コード0**。single step / read / append / picker suppression、Close / New / Open とEdge保持の回帰確認。
+
+画面と JSON report は `build/primary-flow-smoke/`、`build/authoring-smoke/`、`build/desktop-smoke/`（Git対象外）です。最終画面を確認し、常設操作の削減、空シナリオの録画案内、録画後の動作確認、continuation の自動録画表示を確認しました。今回の GUI 変更後の配布物再ビルド・Windows実機は未検証です。初見ユーザー本人によるユーザビリティテストは実施していません。
 
 ## 未確認事項・残課題
 

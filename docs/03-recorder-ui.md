@@ -2,6 +2,8 @@
 
 Status: initial specification before implementation
 
+Visible command hierarchy and the two primary user flows are governed by `14-primary-user-flows-and-ui-hierarchy.md`. Control lists and older toolbar sketches below describe capabilities; ordinary users reach them through state-dependent, contextual, or secondary surfaces.
+
 ## 1. Overall UI concept
 
 The expected desktop implementation uses PySide6 for the FlowTape application UI and Selenium to control a separate browser window.

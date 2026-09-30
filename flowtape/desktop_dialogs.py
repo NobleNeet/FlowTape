@@ -31,7 +31,7 @@ def path_widget(parent, initial='', kind='directory'):
 class NewScenarioDialog(QDialog):
     def __init__(self, parent, root):
         super().__init__(parent)
-        self.setWindowTitle('新規シナリオ')
+        self.setWindowTitle('新しい操作を記録')
         self.resize(680,260)
         layout = QFormLayout(self)
         self.name = QLineEdit()
@@ -43,7 +43,7 @@ class NewScenarioDialog(QDialog):
         self.preview.setFixedHeight(90)
         layout.addRow('作成するパッケージ',self.preview)
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText('作成')
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText('作成して記録へ')
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addRow(self.buttons)
@@ -280,3 +280,63 @@ class CredentialManagerDialog(QDialog):
         if QMessageBox.question(self,'認証情報の削除','共有グループを削除すると既存の参照が解決できなくなります。シナリオは書き換えません。削除しますか？')!=QMessageBox.StandardButton.Yes:return
         try:self.store.remove(item.text());self.refresh()
         except Exception as exc:QMessageBox.warning(self,'認証情報',str(exc))
+
+
+class ManualStepDialog(QDialog):
+    """Basic browser operations without requiring knowledge of the YAML DSL."""
+    def __init__(self,parent,names):
+        super().__init__(parent);self.setWindowTitle('手動で操作を追加');self.resize(480,230)
+        layout=QFormLayout(self)
+        self.action=QComboBox()
+        for label,action in [('クリック','click'),('文字を入力','input'),('項目を選択','select'),
+                             ('ページを開く','open'),('前のページへ戻る','back'),('次のページへ進む','forward'),('再読み込み','refresh')]:
+            self.action.addItem(label,action)
+        layout.addRow('操作',self.action)
+        self.target=QComboBox();self.target.setEditable(True);self.target.addItems(names);layout.addRow('対象の名前',self.target)
+        self.value=QLineEdit();layout.addRow('入力値 / 選択項目 / URL',self.value)
+        self.hint=QLabel('未登録の対象は、追加後に右ペインの「ブラウザで指定」から登録できます。');self.hint.setWordWrap(True);layout.addRow(self.hint)
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText('操作を追加')
+        buttons.accepted.connect(self.validate);buttons.rejected.connect(self.reject);layout.addRow(buttons)
+        self.action.currentIndexChanged.connect(self.update_fields);self.update_fields()
+
+    def update_fields(self):
+        action=self.action.currentData()
+        self.target.setEnabled(action in {'click','input','select'})
+        self.value.setEnabled(action in {'input','select','open'})
+
+    def validate(self):
+        action=self.action.currentData();node={'action':action}
+        if action in {'click','input','select'}:node['target']=self.target.currentText().strip()
+        if action in {'input','select'}:node['value']=self.value.text()
+        if action=='open':node['url']=self.value.text().strip()
+        try:
+            schema.scenario({'version':1,'name':'manual','steps':[node]})
+            self.node=node;self.accept()
+        except Exception as exc:QMessageBox.warning(self,'操作を追加',str(exc))
+
+
+class PageRegistrationDialog(QDialog):
+    """Name the current page with a readable URL rule; YAML stays optional."""
+    def __init__(self,parent,name,suggestion):
+        super().__init__(parent);self.setWindowTitle('このページを記録に登録');self.resize(600,310)
+        layout=QFormLayout(self)
+        hint=QLabel('初めて操作するページです。ページの名前とURLを確認して登録してください。');hint.setWordWrap(True);layout.addRow(hint)
+        self.name=QLineEdit(name);layout.addRow('ページの名前',self.name)
+        self.match=QComboBox()
+        for label,value in [('URLが一致する','equals'),('URLに含まれる','contains'),('URLで始まる','starts_with')]:self.match.addItem(label,value)
+        op,value=next(iter(suggestion['url'].items()));self.match.setCurrentIndex(self.match.findData(op))
+        self.url=QLineEdit(value);layout.addRow('URLの条件',self.match);layout.addRow('URL',self.url)
+        self.advanced=QCheckBox('高度なページ条件をYAMLで編集');layout.addRow(self.advanced)
+        self.yaml=QPlainTextEdit(yaml.safe_dump(suggestion,allow_unicode=True,sort_keys=False));self.yaml.hide();layout.addRow(self.yaml)
+        self.advanced.toggled.connect(self.yaml.setVisible)
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText('このページを登録')
+        buttons.accepted.connect(self.validate);buttons.rejected.connect(self.reject);layout.addRow(buttons)
+
+    def validate(self):
+        try:
+            schema.string(self.name.text().strip(),'page id')
+            self.identify=yaml.safe_load(self.yaml.toPlainText()) if self.advanced.isChecked() else {'url':{self.match.currentData():self.url.text()}}
+            schema.page_condition(self.identify,'identify');self.accept()
+        except Exception as exc:QMessageBox.warning(self,'ページの登録',str(exc))

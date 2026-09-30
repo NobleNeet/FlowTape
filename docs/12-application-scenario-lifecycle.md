@@ -6,6 +6,8 @@ This document defines the application-level startup and scenario lifecycle that 
 
 Where an older document assumes that the GUI can only start with an already-selected scenario package, this document takes precedence: the FlowTape application can exist with no scenario open.
 
+The start-view priority, primary New/Open labels, and visible command hierarchy are governed by `14-primary-user-flows-and-ui-hierarchy.md`. The lifecycle and safety boundaries below remain authoritative.
+
 ## 1. Core lifecycle principle
 
 FlowTape application lifetime, scenario lifetime, and Selenium-controlled browser lifetime are distinct.

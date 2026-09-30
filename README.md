@@ -22,7 +22,7 @@ driver:
 
 ## 使い方
 
-GUI は既存の YAML なしで起動できます。「新規シナリオ」で名前と保存先を指定すると、検証済みの `scenario.yaml` と `elements.yaml` を作成します。「シナリオを開く」では既存パッケージを選択できます。
+GUI は既存の YAML なしで起動できます。初回は「セットアップを開始」から Edge と外部 WebDriver を指定し、接続テスト後に設定を保存します。設定後は「＋ 新しい操作を記録する」または「既存シナリオを開く」から始めます。
 
 ```bash
 flowtape validate /path/to/scenario-directory
@@ -33,13 +33,20 @@ flowtape ui /path/to/scenario-directory --config /path/to/config.yaml
 flowtape doctor --config /path/to/config.yaml --headless
 ```
 
-CLI 再生は `scenario.yaml` の `mode` に従います。画面では `実行` / `確認` / `デバッグ` と再生速度を別々に選べます。`risk: 破壊的` の実行には、設定された確認ポリシーを適用します。
+CLI 再生は `scenario.yaml` の `mode` に従います。画面の「⋯ → 再生・実行の詳細設定」では `実行` / `確認` / `デバッグ` と再生速度を別々に選べます。`risk: 破壊的` の実行には、設定された確認ポリシーを適用します。
 
 `doctor` は外部サイトを使わず、設定された Edge / WebDriver と Recorder の注入・選択・要素一致を確認します。
 
+### 2つの基本フロー
+
+- **新しく記録する:** 「＋ 新しい操作を記録する」→ 名前・保存先を確認して「作成して記録へ」→ 必要なら開始するページを開く → 「● 記録を開始」→ Edgeを操作 → 「■ 記録を終了」→ 「▶ 動作確認する」→ 保存。
+- **続きを記録する:** 保存済みシナリオを開く → 「▶| 続きを記録」→ 先頭から末尾まで自動再生 → 同じEdgeの状態から自動で録画開始 → Edgeで追加操作 → 「■ 記録を終了」→ 保存。失敗や停止では自動録画へ移りません。
+
+通常画面の主要操作は記録・再生・続きを記録・保存・「⋯」です。「▶ 再生 ▼」から通常／ゆっくり／1ステップずつ／選択位置までを選べます。再生中は一時停止・停止、停止位置では再開、失敗時は再試行・スキップ・停止へ切り替わります。
+
 ### アプリ起動とシナリオの切り替え
 
-- 起動時に Edge の起動を試みます。設定がない場合やブラウザ起動に失敗した場合も、シナリオ作成・読込・編集・保存ができます。「初回設定／アプリ設定を作成・編集」で Edge／外部 WebDriver／各保存先／待機時間などを指定して config を作成できます。「設定」メニューから既存 config の選択もできます。WebDriver の自動取得は行いません。
+- 起動時に Edge の起動を試みます。設定がない場合やブラウザ起動に失敗した場合も、シナリオ作成・読込・編集・保存ができます。初回の小さなセットアップでは Edge／外部 WebDriver を確認し、他の保存先・待機時間などには既定値を生成します。「設定 → アプリ設定を作成・編集」で後からすべての設定を編集できます。「設定」メニューから既存 config の選択もできます。WebDriver の自動取得は行いません。
 - ファイルメニューから新規・開く・閉じる・保存・終了を操作できます。新規作成では名前と親フォルダーを指定し、作成先パッケージを事前に確認します。既存のフォルダーを上書き・併合しません。開く操作の主対象はパッケージフォルダーです（CLI／最近の項目では scenario.yaml も扱えます）。
 - 切り替え・閉じる・終了時には記録／再生を停止するか確認し、未確定記録の破棄、未保存変更の保存／破棄／キャンセルを明示的に選択します。保存が失敗した場合は切り替えません。
 - 「シナリオを閉じる」はブラウザを維持して開始画面へ戻ります。新規／別パッケージを開いてもブラウザ状態は継続し、再生進行・undo・記録の挿入位置などは引き継ぎません。
@@ -49,11 +56,11 @@ CLI 再生は `scenario.yaml` の `mode` に従います。画面では `実行`
 ### Recorder / Editor
 
 - Edge のクリック、入力、select、キーボード操作を記録します。パスワード値は取得せず、既存 credential グループ／キーの選択または新規グループの明示登録で参照を作ります。新規登録では GUI でパスワードを再入力します。
-- picker / bind / rebind では対象操作を抑止し、同じ採取要素に一意に戻れる locator を検証します。既存 target が同じ要素を表す場合は再利用します。
-- collection picker は代表行から集合候補を作り、件数・例・ハイライトを確認して登録します。
-- ネストした範囲を `if` / `repeat` / `while` / `for_each` で囲み、else への移動、解除、移動、undo / redo ができます。
-- read / append と outputs は明示的に作成します。「選択後に記録」で既存の後続 Step を残して挿入できます。
-- 名前変更はページ別に参照を解析し、ページを確定できない参照は明示的に確認します。
+- 右ペインの「ブラウザで指定／再指定」または「⋯ → 高度な操作 → ブラウザから対象を登録」では対象操作を抑止し、同じ採取要素に一意に戻れる locator を検証します。既存 target が同じ要素を表す場合は再利用します。
+- 「⋯ → 高度な操作 → 繰り返し対象を登録」は代表行から集合候補を作り、件数・例・ハイライトを確認して登録します。
+- Step／範囲を右クリックして「条件付きにする」「繰り返しにする」を選べます。それ以外への移動、解除、上下移動も同じメニューにあります。元に戻す／やり直すは「⋯ → 編集」または Ctrl+Z / Ctrl+Shift+Z です。
+- Step間の「＋」から「手動で操作を追加」または「ここから記録」を選び、後続Stepを残して挿入できます。「⋯ → 操作を追加」に値を読み取る／出力へ追加／YAMLで追加、「⋯ → シナリオ」に出力設定があります。
+- 対象の名前変更は右ペインの「対象の詳細」にあります。ページ別に参照を解析し、ページを確定できない参照は明示的に確認します。
 - 保存は明示操作です。外部編集を検出したら再読込・GUI 保持・保留を選べます。保存途中の I/O エラーでは両ファイルを元に戻します。
 
 保存途中のプロセス終了は package 内の `.flowtape-save.json` で検出します。パッケージを開くときの選択、または `flowtape recover /path/to/package --choice rollback` / `--choice complete` で、保存前へ戻すか保存を完了するか明示的に決めます。未復旧の package は実行しません。
@@ -81,10 +88,13 @@ config／credential 保存は外部変更・writer 競合を検出し、一時�
 .venv/bin/pyinstaller FlowTape.spec
 .venv/bin/python scripts/smoke_desktop.py --driver /absolute/path/to/msedgedriver --executable dist/FlowTape/FlowTape
 .venv/bin/python scripts/smoke_authoring.py --driver /absolute/path/to/msedgedriver
+.venv/bin/python scripts/smoke_primary_flows.py --driver /absolute/path/to/msedgedriver
 ```
 
 Linux 配布物は `dist/FlowTape/FlowTape` です。Windows 用の配布物は Windows 上で同じ spec からビルドしてください。ユーザーの YAML・設定・WebDriver は配布物の外部に置きます。
 
 スモーク確認は画面表示ありの Edge とローカル HTTP fixture を使い、`build/desktop-smoke/` に画面と結果を保存します。仕様照合結果と未確認事項は [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) を参照してください。
 
-`smoke_authoring.py` は実際の Qt 設定／New／認証選択ダイアログと headed Edge で、未作成の保存先への初回設定・登録、認証選択のキャンセルと対象を再選択しない再試行、別シナリオでの再利用、再生、安全な終了を確認します。認証待ちはツールバーの「認証情報の選択を再試行」で再開できます。結果と設定／New 画面は `build/authoring-smoke/` に保存します。
+`smoke_authoring.py` は実際の Qt 設定／New／認証選択ダイアログと headed Edge で、未作成の保存先への初回設定・登録、認証選択のキャンセルと対象を再選択しない再試行、別シナリオでの再利用、再生、安全な終了を確認します。認証待ちは「⋯ → 高度な操作 → 認証情報の選択を再試行」で再開できます。結果と設定／New 画面は `build/authoring-smoke/` に保存します。
+
+`smoke_primary_flows.py` は実際の Qt ボタン・セットアップ・作成・パッケージ選択・ページ登録と headed Edge / localhost を使い、上記2フローを最初から保存まで確認します。画面と結果は `build/primary-flow-smoke/` に保存します。

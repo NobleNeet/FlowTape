@@ -1,4 +1,4 @@
-"""Initial PySide6 two-pane Recorder/Scenario Editor."""
+"""Desktop lifecycle and authoring orchestration; command hierarchy lives in ui_surface."""
 
 from __future__ import annotations
 
@@ -10,10 +10,8 @@ from urllib.parse import urlsplit
 
 import yaml
 from PySide6.QtCore import QTimer, QStandardPaths, Qt
-from PySide6.QtGui import QAction
-from PySide6.QtWidgets import (QApplication, QHBoxLayout, QInputDialog, QLabel,
-    QListWidget, QMainWindow, QMessageBox, QPushButton, QSplitter, QTextEdit,
-    QVBoxLayout, QWidget, QComboBox, QToolBar, QFileDialog, QDialog)
+from PySide6.QtWidgets import (QApplication, QInputDialog, QMainWindow, QMessageBox,
+    QVBoxLayout, QWidget, QFileDialog, QDialog, QMenu)
 
 from . import schema
 from .browser import Resolver, open_edge, seconds
@@ -31,8 +29,10 @@ from .authoring import referenced_targets
 from .lifecycle import Preferences, create_package
 from .environment import CredentialStore, atomic_yaml, snapshot, credential_reference
 from .desktop_dialogs import (NewScenarioDialog, SettingsDialog, CredentialSelectionDialog,
-                              CredentialManagerDialog)
+                              CredentialManagerDialog, ManualStepDialog, PageRegistrationDialog)
 from .login_authoring import InputEvidence, username_candidate
+from .ui_surface import build_surface, update_surface
+from .browser_setup import BrowserSetupDialog
 
 
 def recorder_boundary(method):
@@ -90,6 +90,10 @@ class FlowTapeWindow(QMainWindow):
         self.worker = None
         self.pending_close = False
         self.record_after_play = False
+        self.continuation_recording = False
+        self.just_recorded = False
+        self.last_recorded_count = 0
+        self.record_start_count = 0
         self.actions = {}
         self.browser_actions = set()
         self.scenario_actions = set()
@@ -110,84 +114,7 @@ class FlowTapeWindow(QMainWindow):
                               ('共有認証情報を管理',self.manage_credentials)]:
             action = settings_menu.addAction(label)
             action.triggered.connect(lambda checked=False, callback=method: callback())
-        toolbar = QToolBar('編集', self)
-        self.addToolBar(toolbar)
-        for label, method in (("ブラウザ", self.open_browser), ("URLを開く", self.open_url),
-                              ("記録開始", self.start_record), ("選択後に記録", self.start_insertion_record), ("記録停止", self.stop_record), ("認証情報の選択を再試行", self.retry_credential), ("記録保留を破棄", self.discard_pending),
-                              ("選択", self.start_pick), ("collection 選択", self.start_collection_pick), ("条件で囲む", self.wrap_if), ("else へ移す",self.move_to_else),
-                              ("繰り返し", self.wrap_repeat), ("while", self.wrap_while), ("for_each", self.wrap_for_each),
-                              ("追加", self.add_step), ("read", self.author_read), ("append", self.author_append), ("outputs", self.edit_outputs),
-                              ("bind / rebind", self.bind_selected), ("未登録 target", self.bind_missing), ("診断", self.diagnose_selected), ("上へ", self.move_up), ("下へ", self.move_down),
-                              ("削除", self.delete_steps), ("解除", self.unwrap),
-                              ("名前変更", self.rename_registered_target), ("戻す", self.undo),
-                              ("やり直す", self.redo), ("適用", self.apply_properties),
-                              ("保存", self.save)):
-            action = QAction(label, self)
-            action.triggered.connect(method)
-            toolbar.addAction(action)
-            self.actions[label] = action
-            if label == 'ブラウザ': action.setText('ブラウザを起動／再試行')
-            if label not in {'ブラウザ', 'URLを開く'}: self.scenario_actions.add(label)
-            if label in {'URLを開く', '記録開始', '選択後に記録', '記録停止', '選択', 'collection 選択',
-                         'bind / rebind', '未登録 target', '診断', 'read'}: self.browser_actions.add(label)
-        settings_bar = QHBoxLayout()
-        layout.addLayout(settings_bar)
-        self.mode_box = QComboBox()
-        self.mode_box.addItems(['実行','確認','デバッグ'])
-        self.mode_box.setCurrentText('実行')
-        self.mode_box.currentTextChanged.connect(self.change_mode)
-        settings_bar.addWidget(QLabel('モード'))
-        settings_bar.addWidget(self.mode_box)
-        self.pace_box = QComboBox()
-        for label, value in [('通常','0s'),('1秒','1s'),('2秒','2s'),('5秒','5s'),('ステップ',None)]:
-            self.pace_box.addItem(label, value)
-        settings_bar.addWidget(QLabel('再生'))
-        settings_bar.addWidget(self.pace_box)
-        continue_button = QPushButton('最後まで再生して記録')
-        continue_button.clicked.connect(self.play_then_record)
-        settings_bar.addWidget(continue_button)
-        self.continue_button = continue_button
-        settings_bar.addStretch()
-        playback_bar = QHBoxLayout()
-        layout.addLayout(playback_bar)
-        self.playback_buttons = []
-        for label, method in (("最初から", self.restart_playback), ("再開", self.play),
-                              ("1ステップ", self.single_step), ("選択位置まで", self.play_until_selected),
-                              ("一時停止", self.pause_playback), ("停止", self.stop_playback),
-                              ("再試行", self.retry_playback), ("スキップ", self.skip_playback)):
-            button = QPushButton(label)
-            button.clicked.connect(method)
-            playback_bar.addWidget(button)
-            self.playback_buttons.append(button)
-        splitter = QSplitter()
-        self.editor_splitter = splitter
-        self.start_view = QWidget()
-        start_layout = QVBoxLayout(self.start_view)
-        start_layout.addWidget(QLabel('シナリオが開かれていません'))
-        setup = QPushButton('初回設定／アプリ設定を作成・編集')
-        setup.clicked.connect(self.edit_config)
-        start_layout.addWidget(setup)
-        for label, method in [('＋ 新規シナリオ', self.new_scenario), ('シナリオを開く', self.choose_scenario)]:
-            button = QPushButton(label)
-            button.clicked.connect(method)
-            start_layout.addWidget(button)
-        self.recent_list = QListWidget()
-        self.recent_list.itemDoubleClicked.connect(lambda item: self.open_scenario(item.data(256)))
-        start_layout.addWidget(QLabel('最近のシナリオ（ダブルクリックで開く）'))
-        start_layout.addWidget(self.recent_list)
-        layout.addWidget(self.start_view)
-        layout.addWidget(splitter)
-        self.step_list = QListWidget()
-        self.step_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.step_list.currentRowChanged.connect(self.show_properties)
-        splitter.addWidget(self.step_list)
-        self.properties = QTextEdit()
-        splitter.addWidget(self.properties)
-        splitter.setSizes([500, 500])
-        self.browser_status = QLabel('Browser: unavailable — 設定を選択してブラウザを起動してください')
-        layout.addWidget(self.browser_status)
-        self.status = QLabel("準備完了")
-        layout.addWidget(self.status)
+        build_surface(self, layout)
         self.timer = QTimer(self)
         self.timer.setInterval(100)
         self.timer.timeout.connect(self.poll)
@@ -199,22 +126,126 @@ class FlowTapeWindow(QMainWindow):
         self.timer.start()
 
     def update_actions(self):
-        active = self.scenario is not None
-        ready = self.driver is not None and self.config is not None
-        for label, action in self.actions.items():
-            enabled = True
-            if label in self.scenario_actions or label in {'シナリオを閉じる', '保存'}:
-                enabled = active
-            if label in self.browser_actions:
-                enabled = enabled and ready
-            action.setEnabled(enabled)
-        self.mode_box.setEnabled(active)
-        self.pace_box.setEnabled(active and ready)
-        self.continue_button.setEnabled(active and ready)
-        for button in self.playback_buttons: button.setEnabled(active and ready)
-        self.editor_splitter.setVisible(active)
-        self.start_view.setVisible(not active)
-        self.update_recent()
+        update_surface(self)
+
+    def toggle_record(self):
+        if self.recording: self.stop_record()
+        else:
+            self.continuation_recording = False
+            self.record_position = None
+            self.start_record()
+
+    def primary_playback(self):
+        state = self.controller.state if self.controller else 'idle'
+        if state == 'failed': self.retry_playback()
+        elif state == 'running' or (self.worker and self.worker.isRunning() and state != 'paused'):
+            self.pause_playback()
+        else: self.play()
+
+    def choose_playback(self, choice):
+        if choice == '1ステップずつ': self.pace_box.setCurrentText('ステップ')
+        elif choice == 'ゆっくり':
+            delay = self.config['playback']['observation_delay'] if self.config else '1s'
+            if seconds(delay) <= 0: delay = '1s'
+            index = self.pace_box.findData(delay)
+            if index < 0:
+                self.pace_box.addItem('ゆっくり ('+delay+')',delay)
+                index = self.pace_box.count()-1
+            self.pace_box.setCurrentIndex(index)
+        else: self.pace_box.setCurrentText('通常')
+        if self.controller and self.controller.state == 'paused':
+            self.controller.player.config['playback']['observation_delay'] = self.pace_box.currentData() or '0s'
+        self.play()
+
+    def show_playback_settings(self): self.playback_settings.exec()
+
+    def show_yaml_details(self):
+        self.properties.setVisible(not self.properties.isVisible())
+        self.apply_button.setVisible(self.properties.isVisible())
+
+    def validate_scenario(self):
+        if self.scenario is None: return
+        try:
+            schema.scenario(self.scenario);schema.elements(self.registry)
+            schema.validate_package(self.scenario,self.registry)
+            self.status.setText('シナリオの検証に成功しました')
+        except Exception as exc: QMessageBox.warning(self,'シナリオの検証',str(exc))
+
+    def insertion_location(self, row):
+        if row < 0: return ('root',),0
+        _,parent,index,_ = self.rows[row]
+        key = next(key for key,steps in sequences(self.scenario).items() if steps is parent)
+        return key,index+1
+
+    def record_at(self, row):
+        if self.recording or (self.worker and self.worker.isRunning()): return
+        if self.pending_operation or self.operation_queue or self.recorder_error:
+            self.status.setText('保留中の記録を確定または破棄してください');return
+        self.continuation_recording = False
+        self.record_position = self.insertion_location(row)
+        self.start_record()
+        self.update_actions()
+
+    def manual_add_at(self, row):
+        if self.scenario is None: return
+        position = self.insertion_location(row)
+        names = sorted({name for page in self.registry['pages'].values() for name in page.get('elements',{})})
+        dialog = ManualStepDialog(self,names)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            trial = copy.deepcopy(self.scenario)
+            key,index = position
+            sequences(trial)[key].insert(index,dialog.node)
+            self._commit_edit(trial)
+
+    def insertion_menu(self,row):
+        menu = QMenu(self)
+        action = menu.addAction('＋ 手動で操作を追加')
+        action.triggered.connect(lambda:self.manual_add_at(row))
+        action.setEnabled(not self.recording and not (self.worker and self.worker.isRunning()))
+        action = menu.addAction('● ここから記録')
+        action.triggered.connect(lambda:self.record_at(row))
+        action.setEnabled(self.driver is not None and not self.recording and not self.pending_operation and not self.operation_queue and not self.recorder_error and not (self.worker and self.worker.isRunning()))
+        return menu
+
+    def show_insertion_menu(self,row,position=None):
+        if self.scenario is None: return
+        menu = self.insertion_menu(row)
+        menu.exec(position or self.insert_first_button.mapToGlobal(self.insert_first_button.rect().bottomLeft()))
+        menu.deleteLater()
+
+    def step_context_menu(self):
+        menu = QMenu(self)
+        for key in ('上へ','下へ','削除'):menu.addAction(self.actions[key])
+        conditional = menu.addMenu('条件付きにする')
+        for key in ('条件で囲む','else へ移す'):conditional.addAction(self.actions[key])
+        loops = menu.addMenu('繰り返しにする')
+        for key in ('繰り返し','while','for_each'):loops.addAction(self.actions[key])
+        menu.addAction(self.actions['解除'])
+        menu.addSeparator()
+        menu.addAction('この位置の後に追加',lambda:self.show_insertion_menu(self.step_list.currentRow()))
+        menu.addAction('YAML・詳細を編集',self.show_yaml_details)
+        return menu
+
+    def show_step_context(self,position):
+        if self.scenario is None or self.recording: return
+        item = self.step_list.itemAt(position)
+        if item is not None and not item.isSelected(): self.step_list.setCurrentItem(item)
+        menu = self.step_context_menu()
+        menu.exec(self.step_list.viewport().mapToGlobal(position));menu.deleteLater()
+
+    def setup_browser(self):
+        if self.lifecycle_busy: return
+        if not self.resolve_boundary(include_unsaved=False): return
+        source = self.config_path or self.preferences.path.with_name('config.yaml')
+        try: dialog = BrowserSetupDialog(self,source,self.config)
+        except Exception as exc:
+            QMessageBox.warning(self,'ブラウザ設定',str(exc));return
+        self.lifecycle_busy = True
+        try: accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally: self.lifecycle_busy = False
+        if accepted and self.save_configuration(dialog.source,dialog.result_document,dialog.original):
+            self.open_browser()
+        dialog.deleteLater()
 
     def update_recent(self):
         self.recent_menu.clear()
@@ -415,6 +446,7 @@ class FlowTapeWindow(QMainWindow):
         self.input_evidence.clear()
         self.recorder_error = None
         self.confirmed_destructive = self.record_after_play = self.pending_close = False
+        self.continuation_recording = self.just_recorded = False
         self.dirty = False
         self.saved_mtimes = self.deferred_mtimes = None
         self.refresh()
@@ -522,6 +554,7 @@ class FlowTapeWindow(QMainWindow):
 
     def refresh(self):
         self.update_actions()
+        self.update_recent()
         if self.scenario is None:
             self.rows = []
             self.step_list.clear()
@@ -544,6 +577,10 @@ class FlowTapeWindow(QMainWindow):
                 if 'description' in node: summary = node['description']
                 elif label in {'click','double_click','hover','input','select','upload'}:
                     summary = detail + ' を ' + {'click':'クリック','double_click':'ダブルクリック','hover':'ポイント','input':'入力','select':'選択','upload':'アップロード'}[label]
+                elif label == 'open': summary = node['url']+' を開く'
+                elif label in {'back','forward','refresh','close_window'}:summary={'back':'前のページへ戻る','forward':'次のページへ進む','refresh':'ページを再読み込み','close_window':'現在のタブを閉じる'}[label]
+                elif label == 'if':summary=str(node['if'].get('exists',node.get('description','条件')))+' の場合'
+                elif label == 'while':summary=str(node['while'].get('exists','条件を満たす'))+' 間、繰り返す'
                 elif label == 'read': summary = f"{detail} から {node['into']} へ取得"
                 elif label == 'append': summary = f"{node['output']} に出力"
                 elif label == 'repeat': summary = f"{node['repeat']['count']} 回繰り返す"
@@ -561,10 +598,23 @@ class FlowTapeWindow(QMainWindow):
                 for kind in ("repeat", "while", "for_each"):
                     if kind in node: add(node[kind]["steps"], depth + 1)
         add(self.scenario["steps"])
+        if self.rows and self.step_list.currentRow()<0:self.step_list.setCurrentRow(0)
         self.setWindowTitle(f"FlowTape — {self.scenario['name']}{' *' if self.dirty else ''}")
+        self.update_actions()
+        self.show_properties(self.step_list.currentRow())
 
     def show_properties(self, row):
-        self.properties.setPlainText(yaml.safe_dump(self.rows[row][0], allow_unicode=True, sort_keys=False) if row >= 0 and row < len(self.rows) else "")
+        selected = 0 <= row < len(getattr(self,'rows',[]))
+        node = self.rows[row][0] if selected else None
+        self.properties.setPlainText(yaml.safe_dump(node,allow_unicode=True,sort_keys=False) if selected else '')
+        self.selection_summary.setText(self.step_list.item(row).text().strip() if selected else '操作を選択すると、内容と対象を確認できます。')
+        names = sorted(referenced_targets({'steps':[node]})) if selected else []
+        known = {name for page in self.registry['pages'].values() for name in page.get('elements',{})} if self.registry else set()
+        missing = set(names)-known
+        self.target_summary.setText(('対象: '+ '、'.join(names)+'\n'+('未登録 — ブラウザで指定してください' if missing else '登録済み — 実際の解決結果は診断で確認できます')) if names else '')
+        self.target_controls.setVisible(bool(names) and not self.recording)
+        self.target_button.setText('ブラウザで指定' if missing else 'ブラウザで再指定')
+        self.yaml_button.setEnabled(selected)
 
     def _validate_edit(self, trial, registry):
         self._ensure_ids(trial["steps"])
@@ -692,7 +742,7 @@ class FlowTapeWindow(QMainWindow):
             return
         target = targets[0]
         if len(targets)>1:
-            target, ok = QInputDialog.getItem(self,'bind / rebind','target',targets,editable=False)
+            target, ok = QInputDialog.getItem(self,'対象を指定','対象の名前',targets,editable=False)
             if not ok:return
         self.start_pick()
         if self.picking:
@@ -921,7 +971,7 @@ class FlowTapeWindow(QMainWindow):
         if not self._browser_available(): return
         if self.driver: return
         if self.config is None:
-            self.browser_status.setText('Browser: unavailable — 設定から config.yaml を選択してください')
+            self.browser_status.setText('Browser: unavailable — セットアップからEdgeに接続してください')
             return
         try:
             self.driver = open_edge(self.config)
@@ -931,7 +981,7 @@ class FlowTapeWindow(QMainWindow):
             self.confirmed_destructive = self.record_after_play = False
             self.timer.start()
             self.status.setText("Edge 起動済み")
-            self.browser_status.setText("Browser: ready")
+            self.browser_status.setText("Browser: ready — Edge 接続済み")
         except Exception as exc:
             self.shutdown_browser()
             self.status.setText('Edge 起動失敗: '+str(exc))
@@ -963,10 +1013,13 @@ class FlowTapeWindow(QMainWindow):
             return
         self.open_browser()
         if not self.driver: return
+        self.record_start_count = sum(1 for node in walk_nodes(self.scenario["steps"]) if "action" in node)
+        self.just_recorded = False
         self.recording = True
         self.picking = False
         self.transport.inject("record")
-        self.status.setText("記録中")
+        self.status.setText("記録中 — Edgeを操作してください")
+        self.update_actions()
 
     def start_insertion_record(self):
         row = self.step_list.currentRow()
@@ -983,7 +1036,12 @@ class FlowTapeWindow(QMainWindow):
         self.operation_queue.extend(self.transport.stop())
         self._process_operations()
         if not self.pending_operation and not self.operation_queue: self.record_position = None
-        self.status.setText("記録停止")
+        self.last_recorded_count = max(0,sum(1 for node in walk_nodes(self.scenario["steps"]) if "action" in node)-self.record_start_count)
+        self.just_recorded = not self.pending_operation and not self.operation_queue
+        self.continuation_recording = False
+        self.status.setText("記録を終了しました。再生して動作を確認できます。")
+        self.show_properties(self.step_list.currentRow())
+        self.update_actions()
 
     def _process_operations(self):
         while self.operation_queue and self.pending_operation is None:
@@ -1051,7 +1109,9 @@ class FlowTapeWindow(QMainWindow):
             except Exception: pass
 
     def poll(self):
-        if self.worker and self.worker.isRunning(): return
+        if self.worker and self.worker.isRunning():
+            self.update_actions()
+            return
         if self.processing_events or self.lifecycle_busy: return
         self.processing_events = True
         try:
@@ -1066,7 +1126,9 @@ class FlowTapeWindow(QMainWindow):
                     self.shutdown_browser()
                     self.browser_status.setText('Browser: unavailable — 接続が失われました。ブラウザから再試行してください')
             self._poll_events()
-        finally: self.processing_events = False
+        finally:
+            self.processing_events = False
+            self.update_actions()
 
     def _poll_events(self):
         if self.scenario is None: return
@@ -1126,20 +1188,11 @@ class FlowTapeWindow(QMainWindow):
         except UnknownPage:
             parsed = urlsplit(self.driver.current_url)
             proposed = (Path(parsed.path).stem or self.driver.title or "page").replace(" ", "_")
-            page_id, ok = QInputDialog.getText(self, "PageDefinition", "新しい page ID", text=proposed)
-            if not ok or not page_id: return None
             path = parsed.path or "/"
             suggestion = {"url": {"contains": path}} if path != "/" else {"url": {"equals": self.driver.current_url}}
-            text, ok = QInputDialog.getMultiLineText(self, "PageDefinition", "identify 条件 (YAML)", yaml.safe_dump(suggestion, allow_unicode=True, sort_keys=False))
-            if not ok: return None
-            try:
-                suggestion = yaml.safe_load(text)
-                schema.page_condition(suggestion, "identify")
-            except Exception as exc:
-                QMessageBox.warning(self, "PageDefinition", str(exc))
-                return None
-            if QMessageBox.question(self, "PageDefinition", f"{page_id}: {suggestion}\n登録しますか？") != QMessageBox.StandardButton.Yes:
-                return None
+            dialog = PageRegistrationDialog(self,proposed,suggestion)
+            if dialog.exec() != QDialog.DialogCode.Accepted: return None
+            page_id,suggestion = dialog.name.text().strip(),dialog.identify
             trial = copy.deepcopy(self.registry)
             if page_id in trial["pages"]:
                 QMessageBox.warning(self, "PageDefinition", "既存の page ID です")
@@ -1255,10 +1308,10 @@ class FlowTapeWindow(QMainWindow):
             name, ok, reuse = reusable[0], True, True
         elif reusable:
             name, ok = QInputDialog.getItem(self,'Target','同じ要素に対応する名前を選択',reusable+['新規登録'],editable=False)
-            if name == '新規登録': name, ok = QInputDialog.getText(self,'Target','論理 target 名',text=proposed)
+            if name == '新規登録': name, ok = QInputDialog.getText(self,'操作の対象','対象の名前',text=proposed)
             else: reuse = True
         else:
-            name, ok = QInputDialog.getText(self,'Target','論理 target 名',text=proposed)
+            name, ok = QInputDialog.getText(self,'操作の対象','対象の名前',text=proposed)
         if not ok or not name: return
         existing = self.registry["pages"][page_id].get("elements", {}).get(name)
         if reuse: definition = copy.deepcopy(existing)
@@ -1373,30 +1426,45 @@ class FlowTapeWindow(QMainWindow):
         self._commit_edit(trial)
 
     def play_then_record(self):
+        # This user intent always establishes the scenario from its beginning.
+        if self.worker and self.worker.isRunning(): return
+        self.record_after_play = False
+        if self.recording or self.pending_operation or self.operation_queue or self.recorder_error:
+            self.status.setText('記録を終了し、保留中の操作を確定または破棄してください');return
+        self.controller = None
+        self.record_position = None
+        self.just_recorded = False
         self.record_after_play = True
-        self._start_playback()
+        if not self._start_playback(): self.record_after_play = False
+        self.update_actions()
 
     def _start_playback(self, *, max_actions=None, until_id=None, retry=False):
         try:
             if self.controller and self.controller.state=='failed' and not retry:
                 self.status.setText('失敗した Step は再試行またはスキップを選択してください')
-                return
+                return False
             if self.worker and self.worker.isRunning():
                 self.controller.action_budget = max_actions
                 self.controller.until_id = until_id
                 self.controller.resume()
-                return
+                self.update_actions()
+                return True
             if self.controller is None or self.controller.state in {"complete", "stopped"}:
-                if not self._new_playback(): return
+                if not self._new_playback(): return False
             self.worker = PlaybackWorker(self.controller, max_actions=max_actions, until_id=until_id, parent=self)
             worker = self.worker
             worker.gate_requested.connect(self._worker_gate)
             worker.action_completed.connect(self._worker_completed)
             worker.finished.connect(self._worker_finished)
             self.worker.start()
+            self.just_recorded = False
             self.status.setText("再生中")
+            self.update_actions()
+            return True
         except Exception as exc:
             self.status.setText("再生停止: " + str(exc))
+            self.update_actions()
+            return False
 
     def play(self):
         self._start_playback(max_actions=1 if self.pace_box.currentData() is None else None)
@@ -1424,8 +1492,10 @@ class FlowTapeWindow(QMainWindow):
 
     def stop_playback(self):
         if self.controller:
+            self.record_after_play = False
             self.controller.stop()
             self.status.setText("停止要求済み")
+            self.update_actions()
 
     def retry_playback(self):
         if not self.controller or self.controller.state != "failed": return
@@ -1441,6 +1511,7 @@ class FlowTapeWindow(QMainWindow):
             return
         self.controller.skip()
         self.status.setText("失敗した Step をスキップしました。再開できます")
+        self.update_actions()
 
     def _worker_gate(self, node):
         if self.sender() is self.worker: self._confirm_action(node)
@@ -1483,9 +1554,13 @@ class FlowTapeWindow(QMainWindow):
             self.close()
         elif state == 'complete' and self.record_after_play:
             self.record_after_play = False
+            self.record_position = None
+            self.continuation_recording = True
             self.start_record()
+            if self.recording:self.status.setText("末尾まで再生しました。Edgeで続きを操作してください。")
         elif state in {'failed','stopped'}:
             self.record_after_play = False
+        self.update_actions()
 
     def closeEvent(self, event):
         if self.lifecycle_busy:

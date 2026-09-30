@@ -153,7 +153,7 @@ Relative paths other than `driver.path` are resolved relative to the directory c
 
 Runtime/environment settings should not be mixed into scenario YAML unless they directly change procedure semantics.
 
-The desktop Settings workflow can create/update this config without hand-written YAML (`13-credential-and-authoring-ux.md`). It exposes browser/profile/driver paths, scenario/log/download/output roots, credentials path, timeouts, loop limits, playback defaults, logging and destructive confirmation. The GUI validates the config and respects restart/recording/playback boundaries before saving; failure does not install the new configuration.
+Guided first-use Edge/WebDriver setup follows `14-primary-user-flows-and-ui-hierarchy.md`, using schema defaults and separate application data roots without downloading a driver. The complete desktop Settings workflow can create/update this config without hand-written YAML (`13-credential-and-authoring-ux.md`). It exposes browser/profile/driver paths, scenario/log/download/output roots, credentials path, timeouts, loop limits, playback defaults, logging and destructive confirmation. The GUI validates the config and respects restart/recording/playback boundaries before saving; failure does not install the new configuration.
 
 ## 8. Credentials file
 
