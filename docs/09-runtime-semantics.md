@@ -438,13 +438,11 @@ In validation/debug modes, resolve and validate editability but do not change th
 
 ### 16.6 `select`
 
-v1 interprets `value:` primarily as exact visible option text.
+`value:` matches exactly one option by visible text after collapsing whitespace (including non-breaking spaces) and trimming. Existing scalar steps retain one-option selection behavior; an already selected option stays selected, and other selected options in a multi-select are preserved.
 
-If no option matches, the step fails.
+`values:` is the complete selected set of a native multi-select. Expand each scalar and apply the same text normalization. Validate that every requested text matches exactly one enabled option, with no duplicate requested texts, before changing selection. Reject this form on a single-select. Remove unrequested selections, then select requested options that are not already selected. `values: []` clears the set. Verify the final set equals the requested set; repeat execution is idempotent. Option values/indexes are not matching keys.
 
-If multiple options have the same acceptable visible text and cannot be distinguished deterministically, selection is ambiguous and fails.
-
-Future schema versions may add explicit select-by-value/index semantics.
+Zero matches, ambiguous option text, disabled requested options, or verification failure are compatibility errors identifying the target. Confirmation/debug modes validate all requested options and target compatibility without changing selection.
 
 ### 16.7 `read`
 

@@ -126,3 +126,12 @@ Python 依存関係は `.venv` に導入しました。sudo / su / root / OS pac
 その後の Lifecycle 実装では VM 内のソース変更・検証だけを実施しました。検証結果の報告後、ユーザーから Lifecycle 変更の commit / push も明示的に指示されました。この追加指示を今回の push の許可として扱います。PR・Issue・Release 操作は実施していません。
 
 今回の docs/13 対応の開発・検証中は VM 内のソース変更・検証だけを実施しました。検証結果の報告後、ユーザーから今回の commit / push と、今後も実装・テスト成功後の作業完了時に commit / push することを明示的に指示されました。この継続的な許可を `AGENTS.md` と `docs/11-development-environment.md` に記録しました。PR・Issue・Release 操作、権限昇格、OS パッケージ追加は行っていません。
+
+
+## UI Testing Playground Select の記録・再生
+
+公開サイト `https://www.uitestingplayground.com/` の Select ページで、複数選択が `multiple_select_state` として記録停止する不具合を再現しました。`select.values` を追加し、完全な選択集合（空集合を含む）の記録と再生、事前選択の解除、再実行時の冪等性に対応しました。既存 scalar `value` は保持します。選択済み option を再クリックして解除しないようにし、native select のクリックを重複する click Step として記録しません。NBSP を含む option の表示テキストは Recorder／Player 共通の DOM 正規化に従います。schema／capture／execution の仕様を同時に更新しました。
+
+`scripts/smoke_select.py` は実 Qt GUI と headed Edge 154.0.4258.37 で、Player による指定トップページの表示→Selectリンクのクリック、3つの単一選択・2つの複数選択のRecorder保存、先頭からの2回の再生を検証しました。結果は Python／New York／Release 2.1、色 Red・Blue、果物 Banana・Date。事前選択3項目を解除し、複数選択はそれぞれ指定2項目だけです。記録された12 Stepと画面・JSON結果は `build/select-smoke/acceptance/` に保存し、最後の選択状態へまとめた7 Stepの再利用例は `examples/select/` に置きました。
+
+最終全テストは **140 passed in 58.74s**、実サイトの最終GUIスモークも終了コード0です。ローカル Edge fixture では複数選択／解除のイベント正規化、NBSP、完全な選択集合、事前選択の解除、再実行、既存scalarの保持、確認／デバッグの非変更、ゼロ件／曖昧／重複指定／disabled／単一選択欄への誤用を検証しました。Windows実機と配布物の再ビルドは今回未確認です。sudo／su／root／OSパッケージ追加や禁止された外部書き込みは行っていません。修正・テスト・ドキュメントは継続的な許可に従いproject remoteへcommit／pushします。PR／Issue／Release操作は行いません。

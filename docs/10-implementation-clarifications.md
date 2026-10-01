@@ -503,6 +503,7 @@ This includes at least:
 open.url
 input.value
 select.value
+select.values entries
 upload.path
 alert_input.value
 key/key-combination textual tokens where applicable
@@ -556,3 +557,7 @@ The decisions in this document remove identified implementation-time product dec
 No known product-level decision remains that should require implementation to stop and request user clarification before ordinary v1 development can proceed.
 
 If implementation later exposes a genuinely new contradiction or an unrepresentable real-world workflow, update the specification deliberately rather than inventing undocumented behavior locally.
+
+## 13. Native multi-select extension
+
+The additive v1 `select.values` field denotes the complete selected set and is mutually exclusive with the existing scalar `select.value`. An empty list clears a multi-select. Each entry uses section 11 text conversion and exact matching after shared whitespace normalization. Scalar steps preserve other multi-select choices and never toggle a selected option off. Validate the complete requested set before mutation; ambiguity and missing/disabled options are errors. The Recorder emits all selected texts for a multi-select change rather than treating multiple selections as unsupported. Details are authoritative in `07` (schema), `08` (capture), and `09` (execution). Existing YAML remains valid; older FlowTape builds reject the new field rather than silently reinterpreting it.

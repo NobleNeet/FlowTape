@@ -134,3 +134,23 @@ def test_diagnostic_logs_obey_level_and_redact_credentials(tmp_path):
     text=log.path.read_text()
     assert 'private-value' not in text and '[REDACTED]' in text
     assert 'hidden debug record' not in text
+
+
+@pytest.mark.parametrize('fields', [
+    {'value': 'Red'}, {'values': ['Red', 'Blue']}, {'values': []},
+    {'values': ['${choice}', 2, True]},
+])
+def test_select_schema_compatible_scalar_and_complete_set(fields):
+    schema.scenario({'version': 1, 'name': 'select', 'steps': [
+        {'action': 'select', 'target': '色', **fields}]})
+
+
+@pytest.mark.parametrize('fields', [
+    {}, {'value': 'Red', 'values': ['Blue']}, {'values': 'Red'},
+    {'values': [None]}, {'values': [['Red']]}, {'values': ['${bad-name}']},
+    {'value': ['Red', 'Blue']},
+])
+def test_select_schema_rejects_invalid_selection(fields):
+    with pytest.raises(ScenarioValidationError):
+        schema.scenario({'version': 1, 'name': 'select', 'steps': [
+            {'action': 'select', 'target': '色', **fields}]})

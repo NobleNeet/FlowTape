@@ -307,6 +307,43 @@ class Player:
                 sleep(min(.05, max(0, deadline - monotonic())))
         return True
 
+    def _select(self, el, node, run):
+        from selenium.webdriver.support.ui import Select
+
+        control = Select(el)
+        exact_set = 'values' in node
+        if exact_set and not control.is_multiple:
+            raise ActionCompatibilityError(f"select target {node['target']}: values requires a multiple select")
+        raw_values = node['values'] if exact_set else [node['value']]
+        expanded_texts = [as_text(self.expand(value).data) for value in raw_values]
+        texts = self.resolver.js('return arguments[0].map(value=>FT.norm(value));', expanded_texts)
+        if len(set(texts)) != len(texts):
+            raise ActionCompatibilityError(f"select target {node['target']}: duplicate option text")
+        options = control.options
+        labels = self.resolver.js('return arguments[0].map(o=>FT.norm(o.textContent));', options)
+        desired = []
+        for text in texts:
+            matches = [option for option, label in zip(options, labels) if label == text]
+            if len(matches) != 1:
+                raise ActionCompatibilityError(f"select target {node['target']}: option count {len(matches)}")
+            option = matches[0]
+            if not option.is_enabled():
+                raise ActionCompatibilityError(f"select target {node['target']}: option disabled")
+            desired.append(option)
+        if not run:
+            return
+        desired_ids = {option.id for option in desired}
+        if exact_set:
+            for option in options:
+                if option.is_selected() and option.id not in desired_ids:
+                    control.deselect_by_index(int(option.get_attribute('index')))
+        for option in desired:
+            if not option.is_selected():
+                option.click()
+        selected_ids = {option.id for option in control.all_selected_options}
+        if ((exact_set or not control.is_multiple) and selected_ids != desired_ids) or not desired_ids <= selected_ids:
+            raise ActionCompatibilityError(f"select target {node['target']}: selection verification failed")
+
     def _action(self, n):
         action = n["action"]
         run = self.mode == "実行"
@@ -331,12 +368,7 @@ class Player:
                     if actual != value:
                         raise ActionCompatibilityError('input value verification failed')
             elif action == "select":
-                from selenium.webdriver.support.ui import Select
-                value = as_text(self.expand(n["value"]).data)
-                options = [opt for opt in Select(el).options if opt.text.strip() == value]
-                if len(options) != 1:
-                    raise ActionCompatibilityError(f"select option count {len(options)}")
-                if run: options[0].click()
+                self._select(el, n, run)
             elif action == "read":
                 if n['into'] in self.variables or n['into'] in self.loop_vars:
                     raise FlowTapeError(f"runtime variable {n['into']} collides with scenario or loop variable")

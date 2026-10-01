@@ -549,12 +549,12 @@ Optional `within`.
 
 ### 10.5 Select
 
-Required:
+Required `target` and exactly one of:
 
-- `target`
-- `value`
+- `value`: interpolatable scalar identifying one option by normalized visible text; existing v1 syntax remains supported.
+- `values`: list of non-null interpolatable scalars identifying the complete selected set of a native multi-select. An empty list clears selection. Duplicate normalized texts after expansion are invalid.
 
-Optional `within`.
+Optional `within`. `values` on a single-select is a runtime compatibility error. Option DOM values and indexes are not persisted selection keys.
 
 ### 10.6 Read
 

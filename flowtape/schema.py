@@ -340,7 +340,7 @@ def node(data: Any, where: str, declared_outputs: dict, scenario_vars: set[str])
         spec = {
             "open": ({"url"}, {"url"}), "click": ({"target", "within"}, {"target"}),
             "double_click": ({"target", "within"}, {"target"}), "input": ({"target", "value", "within"}, {"target", "value"}),
-            "select": ({"target", "value", "within"}, {"target", "value"}), "read": ({"target", "source", "into", "within"}, {"target", "source", "into"}),
+            "select": ({"target", "value", "values", "within"}, {"target"}), "read": ({"target", "source", "into", "within"}, {"target", "source", "into"}),
             "append": ({"output", "values", "value"}, {"output"}), "upload": ({"target", "path", "within"}, {"target", "path"}),
             "key": ({"key", "keys", "target", "within"}, set()), "hover": ({"target", "within"}, {"target"}),
             "drag_drop": ({"from", "to"}, {"from", "to"}), "alert_input": ({"value"}, {"value"}),
@@ -355,7 +355,18 @@ def node(data: Any, where: str, declared_outputs: dict, scenario_vars: set[str])
             string(obj[key], where + "." + key)
         for key in {"url", "path", "value", "within"} & set(obj):
             reference_syntax(obj[key], where + "." + key)
-        if action in {"input", "select", "alert_input"}:
+        if action == "select":
+            if ("value" in obj) == ("values" in obj):
+                fail(where, "select requires exactly one of value or values")
+            if "values" in obj:
+                if not isinstance(obj["values"], list):
+                    fail(where + ".values", "list required")
+                for index, value in enumerate(obj["values"]):
+                    scalar(value, f"{where}.values[{index}]")
+                    if value is None:
+                        fail(f"{where}.values[{index}]", "null selection is invalid")
+                    reference_syntax(value, f"{where}.values[{index}]")
+        if action in {"input", "alert_input"} or (action == "select" and "value" in obj):
             scalar(obj["value"], where + ".value")
         if action == "read":
             src = obj["source"]

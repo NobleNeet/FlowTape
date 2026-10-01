@@ -218,6 +218,19 @@ A scenario is allowed to omit an initial `open` when it intentionally starts fro
   value: 埼玉県
 ```
 
+For a native multi-select, `values` sets the complete selected set, clearing other pre-selected options:
+
+```yaml
+- action: select
+  target: 色
+  values: [Red, Blue]
+- action: select
+  target: 果物
+  values: [Banana, Date]
+```
+
+`value` and `values` are mutually exclusive. `values: []` clears a multi-select. Both forms match option text after whitespace normalization (including non-breaking spaces), not DOM values or indexes. Existing scalar `value` selects one option without toggling an already selected option off; on a multi-select it preserves other selected options.
+
 ### 8.6 Read
 
 Supported v1 read sources are `text`, `value`, and an explicit attribute.

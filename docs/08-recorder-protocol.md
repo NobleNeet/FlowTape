@@ -619,6 +619,10 @@ The capture data should include both:
 
 Scenario generation should normally favor the visible option text for human readability where replay semantics can remain deterministic.
 
+For multi-selects, capture `multiple: true`, `values` (DOM option values for internal evidence) and `texts` (normalized visible texts) for the complete selected set on every change, including an empty set. Persist `texts` as the step's `values` list; do not stop recording when more than one option is selected. Single-selects retain their scalar visible-text step. Normalize option text with the shared DOM whitespace rule, including non-breaking spaces.
+
+Native select/option clicks are selection gestures and must not create additional `click`/`double_click` steps; picker suppression and selection remain active before this filtering. Changes are the selection commit boundary.
+
 Exact Player matching rules for select values/text are defined in runtime semantics.
 
 ## 22. Checkbox and radio controls

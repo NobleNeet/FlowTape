@@ -1,0 +1,63 @@
+version: 1
+pages:
+  ホーム:
+    identify:
+      url:
+        equals: https://www.uitestingplayground.com/?utm_source=chatgpt.com
+    elements:
+      Select:
+        kind: link
+        locate:
+        - by: role
+          role: link
+          name: Select
+  select:
+    identify:
+      url:
+        contains: /select
+    elements:
+      プログラミング言語:
+        kind: select
+        locate:
+        - by: label
+          value: Programming Language (single-select)
+        - by: id
+          value: selectLanguage
+        expect:
+          tag: select
+      都市:
+        kind: select
+        locate:
+        - by: label
+          value: City (contains non-breaking spaces)
+        - by: id
+          value: selectCity
+        expect:
+          tag: select
+      製品バージョン:
+        kind: select
+        locate:
+        - by: label
+          value: Product Version (select by value)
+        - by: id
+          value: selectProduct
+        expect:
+          tag: select
+      色:
+        kind: select
+        locate:
+        - by: label
+          value: Colors (multi-select, hold Ctrl/Cmd to select multiple)
+        - by: id
+          value: selectColors
+        expect:
+          tag: select
+      果物:
+        kind: select
+        locate:
+        - by: label
+          value: Fruits (multi-select, some pre-selected)
+        - by: id
+          value: selectFruits
+        expect:
+          tag: select

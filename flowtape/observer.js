@@ -75,6 +75,7 @@ if (!window.__flowtape) {
   ['pointerdown','mousedown','mouseup','click','dblclick'].forEach(type => on(type, e => {
     if (picker(e) || state.mode !== 'record') return;
     if (type === 'click' || type === 'dblclick') {
+      if(state.normalize(e.composedPath()[0])?.localName==='select') return;
       state.flushInput(); state.emit(type,state.normalize(e.composedPath()[0]),{button:e.button});
     }
   }));
@@ -92,9 +93,13 @@ if (!window.__flowtape) {
     if(state.mode!=='record')return;
     const el=e.composedPath()[0];
     if(el.matches('select')) {
-      if(el.selectedOptions.length!==1) {state.emit('unsupported',null,{reason:'multiple_select_state'});return;}
-      state.flushInput(); const option=el.selectedOptions[0];
-      state.emit('select',el,{value:el.value,text:option?.textContent?.trim()||''});
+      state.flushInput();
+      if(el.multiple) {
+        state.emit('select',el,{multiple:true,values:[...el.selectedOptions].map(o=>o.value),texts:[...el.selectedOptions].map(o=>FT.norm(o.textContent))});
+      } else {
+        const option=el.selectedOptions[0];
+        state.emit('select',el,{value:el.value,text:FT.norm(option?.textContent)});
+      }
     } else if(state.pendingInput?.el===el && !state.composing) state.flushInput();
   });
   on('focusout',e=>{if(state.pendingInput?.el===e.composedPath()[0] && !state.composing)state.flushInput();});

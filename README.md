@@ -98,3 +98,14 @@ Linux 配布物は `dist/FlowTape/FlowTape` です。Windows 用の配布物は 
 `smoke_authoring.py` は実際の Qt 設定／New／認証選択ダイアログと headed Edge で、未作成の保存先への初回設定・登録、認証選択のキャンセルと対象を再選択しない再試行、別シナリオでの再利用、再生、安全な終了を確認します。認証待ちは「⋯ → 高度な操作 → 認証情報の選択を再試行」で再開できます。結果と設定／New 画面は `build/authoring-smoke/` に保存します。
 
 `smoke_primary_flows.py` は実際の Qt ボタン・セットアップ・作成・パッケージ選択・ページ登録と headed Edge / localhost を使い、上記2フローを最初から保存まで確認します。画面と結果は `build/primary-flow-smoke/` に保存します。
+
+### Select の実サイトテスト
+
+[examples/select](examples/select/scenario.yaml) は UI Testing Playground のトップページで「Select」を開き、Python／New York／Release 2.1、色 Red・Blue、果物 Banana・Date を選択します。`select.value` は単一項目の表示テキスト、`select.values` は複数選択欄の完全な選択集合です。事前選択された果物も解除し、指定した2項目だけを残します。
+
+```bash
+flowtape run examples/select --config /path/to/config.yaml
+PYTHONPATH=. .venv/bin/python scripts/smoke_select.py --driver /absolute/path/to/msedgedriver
+```
+
+スモーク確認は画面表示ありの Qt／Edge で選択操作を記録・保存し、トップページから2回再生して5つの選択結果を検証します。実行用設定・記録済みパッケージ・画面・結果は `build/select-smoke/acceptance/` に保存します。公開サイトのテストは通常の少数回の操作に限ります。

@@ -411,3 +411,68 @@ def test_structural_if_repeat_while_limit(browser):
     ]})
     with pytest.raises(LoopLimitExceeded):
         Player(driver, doc, registry(url), cfg).run()
+
+
+def test_record_and_replay_complete_multiselect_state(browser):
+    from selenium.webdriver.support.ui import Select
+    driver, cfg, url = browser
+    driver.get(url)
+    driver.execute_script("""
+      document.body.insertAdjacentHTML('beforeend', '<label for=choices>選択</label><select id=choices multiple><option selected>Old</option><option>Red</option><option>Blue</option></select><label for=city>都市</label><select id=city><option>None</option><option>New&nbsp;York</option></select>');
+    """)
+    transport = RecorderTransport(driver)
+    transport.inject('record')
+    choices = Select(driver.find_element('id', 'choices'))
+    choices.deselect_all()
+    choices.select_by_visible_text('Red')
+    choices.select_by_visible_text('Blue')
+    city = Select(driver.find_element('id', 'city'))
+    city.select_by_visible_text('New York')
+    operations = transport.drain()
+    multi = [op for op in operations if op.action == 'select' and (op.data or {}).get('multiple')]
+    assert [op.data['texts'] for op in multi] == [[], ['Red'], ['Red', 'Blue']]
+    assert any(op.action == 'select' and op.value == 'New York' for op in operations)
+    assert not any(op.action in {'click', 'double_click'} for op in operations + transport.normalizer.flush(force=True))
+    definition = registry(url)
+    definition['pages']['fixture']['elements'].update({
+        '選択': {'kind': 'select', 'locate': [{'by': 'label', 'value': '選択'}]},
+        '都市': {'kind': 'select', 'locate': [{'by': 'label', 'value': '都市'}]},
+    })
+    choices.select_by_visible_text('Old')
+    steps = [{'action': 'select', 'target': '選択', 'values': ['${color}', 'Blue']},
+             {'action': 'select', 'target': '都市', 'value': 'New\u00a0York'}]
+    doc = scenario({'version': 1, 'name': 'sets', 'variables': {'color': 'Red'}, 'steps': steps})
+    for mode in ('確認', 'デバッグ'):
+        Player(driver, doc | {'mode': mode}, definition, cfg).run()
+        assert {o.text for o in choices.all_selected_options} == {'Old', 'Red', 'Blue'}
+    for _ in range(2):
+        Player(driver, doc, definition, cfg).run()
+        assert [o.text for o in choices.all_selected_options] == ['Red', 'Blue']
+    Player(driver, scenario({'version': 1, 'name': 'scalar', 'steps': [
+        {'action': 'select', 'target': '選択', 'value': 'Red'}]}), definition, cfg).run()
+    assert [o.text for o in choices.all_selected_options] == ['Red', 'Blue']
+    Player(driver, scenario({'version': 1, 'name': 'clear', 'steps': [
+        {'action': 'select', 'target': '選択', 'values': []}]}), definition, cfg).run()
+    assert choices.all_selected_options == []
+
+
+@pytest.mark.parametrize('field, expected', [
+    ({'values': ['Missing']}, 'option count 0'),
+    ({'values': ['Red', 'Red']}, 'duplicate'),
+    ({'values': ['Red', 'Duplicate']}, 'option count 2'),
+    ({'values': ['Red', 'Disabled']}, 'option disabled'),
+])
+def test_multiselect_validates_all_options_before_mutation(browser, field, expected):
+    from flowtape.errors import ActionCompatibilityError
+    driver, cfg, url = browser
+    driver.get(url)
+    driver.execute_script("document.body.insertAdjacentHTML('beforeend','<select id=choices multiple><option selected>Old</option><option>Red</option><option>Duplicate</option><option>Duplicate</option><option disabled>Disabled</option></select>')")
+    definition = registry(url)
+    definition['pages']['fixture']['elements']['選択'] = {'kind': 'select', 'locate': [{'by': 'id', 'value': 'choices'}]}
+    doc = scenario({'version': 1, 'name': 'validation', 'steps': [{'action': 'select', 'target': '選択', **field}]})
+    with pytest.raises(ActionCompatibilityError, match=expected):
+        Player(driver, doc, definition, cfg).run()
+    assert driver.execute_script("return [...document.querySelector('#choices').selectedOptions].map(o=>o.text)") == ['Old']
+    driver.execute_script("document.querySelector('#choices').multiple=false")
+    with pytest.raises(ActionCompatibilityError, match='requires a multiple select'):
+        Player(driver, doc, definition, cfg).run()

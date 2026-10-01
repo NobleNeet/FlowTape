@@ -1358,7 +1358,10 @@ class FlowTapeWindow(QMainWindow):
                             f'直前の入力「{username["target"]}」にも {group}.username を使用しますか？')==QMessageBox.StandardButton.Yes:
                             username['value']=credential_reference(group,'username')
                 else:
-                    node["value"] = op.value
+                    if op.action == 'select' and (op.data or {}).get('multiple'):
+                        node['values'] = op.data['texts']
+                    else:
+                        node["value"] = op.value
             if self.record_position:
                 key, index = self.record_position
                 sequences(trial)[key].insert(index,node)

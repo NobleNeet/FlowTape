@@ -1,0 +1,27 @@
+version: 1
+name: Select の単一選択と複数選択
+mode: 実行
+steps:
+- action: open
+  url: https://www.uitestingplayground.com/?utm_source=chatgpt.com
+- action: click
+  target: Select
+- action: select
+  target: プログラミング言語
+  value: Python
+- action: select
+  target: 都市
+  value: New York
+- action: select
+  target: 製品バージョン
+  value: Release 2.1
+- action: select
+  target: 色
+  values:
+  - Red
+  - Blue
+- action: select
+  target: 果物
+  values:
+  - Banana
+  - Date
