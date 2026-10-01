@@ -1,4 +1,4 @@
-"""Headed FlowTape recording/playback acceptance on the approved Select page.
+"""Selenium-driven selection integration smoke, not native Recorder acceptance.
 
 Run with PYTHONPATH=. python scripts/smoke_select.py --driver /path/to/msedgedriver.
 Artifacts, runtime config and the reusable scenario package stay under build/.

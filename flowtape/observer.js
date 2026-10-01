@@ -7,6 +7,16 @@ if (!window.__flowtape) {
     framePath:window===window.top?[]:null,
     refs:new Map(), elementIds:new WeakMap(), nextElementId:0,
     handlers:[], observedRoots:new WeakSet(),
+    traceEnabled:false,
+    traces:[], traceSequence:0, traceOverflow:false,
+    pageConditions:{},
+    trace(stage, fields={}) {
+      if(!this.traceEnabled)return;
+      const record={stage,document_id:this.documentInstanceId,trace_seq:++this.traceSequence,event_seq:this.sequence,mode:this.mode,...fields};
+      if(this.traces.length<1000)this.traces.push(record);else this.traceOverflow=true;
+      if(typeof window.__flowtape_trace==='function')window.__flowtape_trace(JSON.stringify(record));
+    },
+    drainTraces() {const result=this.traces;this.traces=[];return result;},
     closedHosts:new WeakSet(),
     overlay:null,
     highlights:[],
@@ -24,6 +34,7 @@ if (!window.__flowtape) {
     },
     setMode(mode) {
       this.mode=mode;
+      this.trace('observer_mode');
       if(!['pick','rebind','collection_pick'].includes(mode)) {this.overlay?.remove();this.overlay=null;}
     },
     drain() { const result=this.events; this.events=[]; return result; },
@@ -38,13 +49,21 @@ if (!window.__flowtape) {
         ref=this.elementIds.get(target);
         if(!ref) {ref=++this.nextElementId; this.elementIds.set(target,ref);this.refs.set(ref,new WeakRef(target));}
       }
+      const snapshot=target?FT.snapshot(target):null;
+      if(target && ['click','dblclick'].includes(type) && window===window.top && !snapshot.shadow_path.length) {
+        snapshot.capture=FT.captureEvidence(target,snapshot,this.documentInstanceId,this.pageConditions);
+      }
       const event={protocol_version:1,document_instance_id:this.documentInstanceId,
         event_seq:++this.sequence,timestamp:performance.timeOrigin+performance.now(),type,
         window_context:{frame_path:this.framePath},
         document:{url:location.href,title:document.title},
-        target:target ? {snapshot:FT.snapshot(target),element_ref:ref} : null,data};
+        target:target ? {snapshot,element_ref:ref} : null,data};
       this.events.push(event);
-      if(typeof window.__flowtape_emit==='function') window.__flowtape_emit(JSON.stringify(event));
+      this.trace('observer_emit',{type,tag:target?.localName||'',binding:typeof window.__flowtape_emit==='function'});
+      if(typeof window.__flowtape_emit==='function') {
+        window.__flowtape_emit(JSON.stringify(event));
+        this.trace('observer_delivery',{type,binding:true});
+      }
     },
     normalize(el) {
       return el?.closest('button,a[href],input,textarea,select,summary,[contenteditable],[role="button"],[role="link"],[role="checkbox"],[role="radio"],[role="tab"],[role="menuitem"]') || el;
@@ -53,7 +72,13 @@ if (!window.__flowtape) {
       if (this.pendingInput) { this.emit('input_commit',this.pendingInput.el,this.pendingInput.data); this.pendingInput=null; }
     }
   };
-  const on = (name, fn) => {document.addEventListener(name, fn, true);state.handlers.push([name,fn]);};
+  const on = (name, fn) => {
+    const handler=e=>{
+      state.trace('observer_input',{type:e.type,trusted:e.isTrusted,tag:e.composedPath()[0]?.localName||'',input_type:e.composedPath()[0]?.type||''});
+      fn(e);
+    };
+    document.addEventListener(name, handler, true);state.handlers.push([name,handler]);
+  };
   on('pointermove',e=>{
     if(!['pick','rebind','collection_pick'].includes(state.mode))return;
     const el=state.normalize(e.composedPath()[0]);if(!el)return;
@@ -75,8 +100,14 @@ if (!window.__flowtape) {
   ['pointerdown','mousedown','mouseup','click','dblclick'].forEach(type => on(type, e => {
     if (picker(e) || state.mode !== 'record') return;
     if (type === 'click' || type === 'dblclick') {
-      if(state.normalize(e.composedPath()[0])?.localName==='select') return;
-      state.flushInput(); state.emit(type,state.normalize(e.composedPath()[0]),{button:e.button});
+      const origin=e.composedPath()[0],target=state.normalize(origin);
+      if(target?.localName==='select') {
+        state.trace('observer_filter',{type,reason:'native_select_change'});return;
+      }
+      if(origin.closest('label')?.control && !target.matches('button,a[href],input,textarea,select,[contenteditable],[role]')) {
+        state.trace('observer_filter',{type,reason:'label_activation_relay'});return;
+      }
+      state.flushInput(); state.emit(type,target,{button:e.button});
     }
   }));
   on('compositionstart',()=>{state.composing=true;});

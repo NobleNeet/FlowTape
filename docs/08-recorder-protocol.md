@@ -1184,3 +1184,12 @@ The protocol should be covered by tests for at least:
 - Record click -> application action not suppressed
 - queue overflow -> explicit error/desync state
 - duplicate/retried event delivery -> no duplicate semantic operation
+
+
+## 49. Native input diagnostics and source verification
+
+The optional `FLOWTAPE_RECORDER_TRACE` developer diagnostic records only runtime document/sequence identities, event kinds, trusted flags, pipeline state/counts/reasons and Step identities. It must never persist input values, credentials, accessible names, URLs, snapshots or complete raw events. It traces admission at the observer, binding delivery, merged transport, normalization and UI queue/commit boundaries. Explicitly ignored native-select clicks and label activation relays are identified rather than counted as losses.
+
+For top-level clicks with no frame/shadow context, Stage 1 may synchronously verify bounded semantic locator candidates against the original element with the same shared locator/acceptance definitions used by the Player. It also captures existing PageDefinition matches/conditions on that source document. This evidence remains in memory. After navigation, the UI may use only verified, stable candidates and source page evidence to register/reuse the original target and finalize the original click. Page registration/target naming remain explicit. Existing URL-only conditions may be evaluated against the captured URL; DOM-dependent conditions require contemporaneous source evidence. Ambiguous or missing evidence retains the pending operation instead of guessing. No extra open step is added to explain a captured navigation click.
+
+Label activation sends a click to its associated control. The originating non-interactive label click is not a separate operation; the forwarded control click is recorded. Links/buttons/other interactive descendants retain their own actions. Native acceptance coverage and transport-stage evidence are documented in `testing/recorder-native-input.md`.

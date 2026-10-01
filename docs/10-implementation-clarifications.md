@@ -561,3 +561,8 @@ If implementation later exposes a genuinely new contradiction or an unrepresenta
 ## 13. Native multi-select extension
 
 The additive v1 `select.values` field denotes the complete selected set and is mutually exclusive with the existing scalar `select.value`. An empty list clears a multi-select. Each entry uses section 11 text conversion and exact matching after shared whitespace normalization. Scalar steps preserve other multi-select choices and never toggle a selected option off. Validate the complete requested set before mutation; ambiguity and missing/disabled options are errors. The Recorder emits all selected texts for a multi-select change rather than treating multiple selections as unsupported. Details are authoritative in `07` (schema), `08` (capture), and `09` (execution). Existing YAML remains valid; older FlowTape builds reject the new field rather than silently reinterpreting it.
+
+
+## 14. Event-boundary source proof for click capture
+
+A click's original element may be verified synchronously at its event boundary using shared locator/kind/acceptance semantics. The verified stable candidates and source PageDefinition evidence remain internal memory-only capture metadata. The UI may finalize the original click using that proof, whether navigation has already completed or is racing live lookup. It never uses destination DOM to validate source identity. Without proof (including ambiguity, dynamic-ID-only evidence, or unverified frame/shadow context), the original pending/rebind behavior remains. Explicit source page registration and target naming are still required, and cancellation retains pending capture rather than falling through to another registration attempt. No extra open action is generated for a click-caused navigation.

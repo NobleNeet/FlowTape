@@ -567,3 +567,8 @@ A later version may compare repeated observations of the same logical target.
 Changing values across observations can provide evidence that an ID/attribute is dynamic; repeatedly stable semantic evidence may gain confidence.
 
 This is a future enhancement and not required for the first implementation.
+
+
+## Source verification before navigation
+
+A top-level click can verify bounded semantic candidates synchronously in Stage 1, before navigation destroys its DOM. Candidate matching and acceptable-element filtering use the shared Player DOM definitions. Only candidates proven unique and identical to the captured element can be used afterward; dynamic IDs remain rejected by the Python generator. This allows explicit target registration from source evidence without consulting the destination DOM. Missing/ambiguous evidence and unverified frame/shadow contexts retain pending capture/rebind behavior. These proof records remain internal, in-memory metadata and do not enter scenario YAML or registry schema.

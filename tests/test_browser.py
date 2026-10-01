@@ -476,3 +476,74 @@ def test_multiselect_validates_all_options_before_mutation(browser, field, expec
     driver.execute_script("document.querySelector('#choices').multiple=false")
     with pytest.raises(ActionCompatibilityError, match='requires a multiple select'):
         Player(driver, doc, definition, cfg).run()
+
+
+def test_navigation_source_evidence_is_unique_and_never_persisted(browser):
+    from flowtape.recorder import captured_target
+    driver, _, url = browser
+    driver.get(url)
+    transport = RecorderTransport(driver)
+    transport.set_pages(registry(url)['pages'])
+    try:
+        transport.inject('record')
+        driver.find_element('id', 'next').click()  # Local fixture integration, not native acceptance.
+        operations = transport.stop()
+        click = next(op for op in operations if op.action == 'click')
+        assert click.snapshot['capture']['pages'] == ['fixture']
+        assert click.snapshot['capture']['document_id'] == click.document_id
+        definition = captured_target(click)
+        assert definition and set(definition) == {'kind', 'locate', 'expect'}
+        assert any(loc.get('value') == 'next' for loc in definition['locate'])
+        elements({'version': 1, 'pages': {'fixture': {'identify': {'url': {'equals': url}},
+                   'elements': {'次へ': definition}}}})
+        # Dynamic IDs and duplicated role/text cannot qualify as source proof.
+        driver.get(url)
+        driver.execute_script("document.querySelector('#next').id='99999999';document.querySelector('body').insertAdjacentHTML('beforeend','<a href=/next.html>次へ</a>')")
+        transport.reset()
+        transport.inject('record')
+        driver.find_element('id', '99999999').click()
+        click = next(op for op in transport.stop() if op.action == 'click')
+        assert captured_target(click) is None
+    finally:
+        transport.close()
+
+
+def test_observer_diagnostics_have_polling_fallback_without_values(browser, tmp_path, monkeypatch):
+    import json
+    driver, _, url = browser
+    monkeypatch.setenv('FLOWTAPE_RECORDER_TRACE', str(tmp_path / 'trace.jsonl'))
+    driver.get(url)
+    transport = RecorderTransport(driver)
+    try:
+        transport.inject('record')
+        # A missing diagnostic binding must not hide observer admission. The
+        # regular event binding still transports raw capture in memory.
+        driver.execute_script('delete window.__flowtape_trace')
+        driver.find_element('id', 'field').send_keys('fixture-private-value')
+        driver.find_element('id', 'save').click()
+        transport.stop()
+        content = (tmp_path / 'trace.jsonl').read_text()
+        assert 'fixture-private-value' not in content and url not in content
+        rows = [json.loads(line) for line in content.splitlines()]
+        assert any(row['stage'] == 'observer_input' and row.get('type') == 'input' for row in rows)
+        assert any(row['stage'] == 'observer_emit' and row.get('type') == 'input_commit' for row in rows)
+        observer_ids = [(row['document_id'], row['trace_seq']) for row in rows if 'trace_seq' in row]
+        assert len(observer_ids) == len(set(observer_ids))
+    finally:
+        transport.close()
+
+
+def test_source_proof_uses_the_generated_editability_expectation(browser):
+    from flowtape.recorder import captured_target
+    driver, _, url = browser
+    driver.get(url)
+    driver.execute_script("document.querySelector('#field').readOnly=true")
+    transport = RecorderTransport(driver)
+    try:
+        transport.inject('record')
+        driver.find_element('id', 'field').click()
+        click = next(op for op in transport.stop() if op.action == 'click')
+        assert click.snapshot['editable'] is False
+        assert captured_target(click) is None
+    finally:
+        transport.close()

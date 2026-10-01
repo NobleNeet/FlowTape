@@ -135,3 +135,18 @@ Python 依存関係は `.venv` に導入しました。sudo / su / root / OS pac
 `scripts/smoke_select.py` は実 Qt GUI と headed Edge 154.0.4258.37 で、Player による指定トップページの表示→Selectリンクのクリック、3つの単一選択・2つの複数選択のRecorder保存、先頭からの2回の再生を検証しました。結果は Python／New York／Release 2.1、色 Red・Blue、果物 Banana・Date。事前選択3項目を解除し、複数選択はそれぞれ指定2項目だけです。記録された12 Stepと画面・JSON結果は `build/select-smoke/acceptance/` に保存し、最後の選択状態へまとめた7 Stepの再利用例は `examples/select/` に置きました。
 
 最終全テストは **140 passed in 58.74s**、実サイトの最終GUIスモークも終了コード0です。ローカル Edge fixture では複数選択／解除のイベント正規化、NBSP、完全な選択集合、事前選択の解除、再実行、既存scalarの保持、確認／デバッグの非変更、ゼロ件／曖昧／重複指定／disabled／単一選択欄への誤用を検証しました。Windows実機と配布物の再ビルドは今回未確認です。sudo／su／root／OSパッケージ追加や禁止された外部書き込みは行っていません。修正・テスト・ドキュメントは継続的な許可に従いproject remoteへcommit／pushします。PR／Issue／Release操作は行いません。
+
+
+## RecorderのOS入力経路の原因調査・修正
+
+旧 `smoke_select.py` はSelenium-driven integrationであり、Recorderの実ユーザー入力の受入条件には扱いません。[試験範囲の監査・診断・再現・結果](docs/testing/recorder-native-input.md) を追加しました。
+
+修正前のOS入力で、clickの配送はobserver/CDP/Transport/Normalizer/UI queueまで保たれているが、UIのsource/current URL判定で停止してStep化できないことを確認しました。さらにURLチェック後にDOMが遷移する競合と、checkboxのlabel/inputを別Targetへ二重登録する問題を再現しました。click時点の共有DOM意味による一意性・source PageDefinitionの証拠を使って元clickを確定し、label activationは実controlのclickに一本化しました。証拠がない/曖昧/未確認context/未確定ページ条件は保留する境界を維持しています。Normalizerでは同一snapshotの複数イベントのdocument/ref/sequenceを元イベントごとに保持します。
+
+`FLOWTAPE_RECORDER_TRACE` のvalue-free診断でobserver admission・emit・binding・poll/merge・normalize・UI queue/commit/ignoreを追跡できます。診断のCDPコピーとメモリリングのpollコピーはtrace identityで重複排除し、入力値・URL・accessible name・snapshot・credentialsはログへ書きません。
+
+`scripts/smoke_recorder_native.py` はX11 XTESTのみでEdgeへ入力し、Read-only CDPで座標/状態を確認します。input replay/retry/DOM修正はありません。Step追加待ちを次の入力の条件にせず、バッチ後に全件の値・順序・個数と配送identityを照合します。Playgroundのclick/input/checkbox（本体とlabel）/single select/Ctrl+multi select/navigationを各10回、すべて欠落0・trusted入力で確認しました。公開29ページのcatalogではradio入力が見当たらず、許可済みのSelenium公式web-formでradio本体/labelを10回補足検証し、別サイトとして報告しています。
+
+結果とtraceは `build/native-recorder/verified-*/`、集約は `build/native-recorder/summary.json` です。**全149テスト成功**。Stage 1の保守的なlocator/identity、destination DOMを参照しないUI確定、未確認条件での保留、診断の値非保存・CDP/poll重複排除・診断binding欠落時のfallbackを回帰テストで確認しました。
+
+Linuxのheaded Edge 154.0.4258.37・既存X11/XTEST/IBusを使用し、IBusのoriginal engineは終了時に復元・確認しました。`python-xlib` は `.venv` に導入（optional native-test extra）。WindowsのOS入力・日本語IME・配布物再ビルドは未検証です。sudo/su/root/OS package installationや禁止されたVM外への書き込みはありません。ソース・テスト・ドキュメントは継続許可に従いcommit/pushし、実行成果物・依存パッケージを除外します。

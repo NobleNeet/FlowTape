@@ -12,6 +12,7 @@ dependencies = ["PyYAML>=6", "selenium>=4.49,<5"]
 [project.optional-dependencies]
 ui = ["PySide6>=6.7"]
 test = ["pytest>=8"]
+native-test = ["python-xlib>=0.33; sys_platform == 'linux'"]
 build = ["PyInstaller>=6.16"]
 
 [project.scripts]

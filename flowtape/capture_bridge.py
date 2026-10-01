@@ -11,10 +11,12 @@ from selenium.webdriver.common.bidi.cdp import import_devtools
 from selenium.webdriver.remote.websocket_connection import WebSocketConnection
 
 from .errors import FlowTapeError
+from .recorder_trace import RecorderTrace
 
 
 class CaptureBridge:
-    def __init__(self, driver, handle, target_id=None):
+    def __init__(self, driver, handle, target_id=None, trace=None):
+        self.trace = trace or RecorderTrace()
         # Selenium's version discovery is isolated here; the application still
         # exclusively uses the configured external WebDriver executable.
         version, endpoint = driver._get_cdp_details()
@@ -32,8 +34,17 @@ class CaptureBridge:
         self.callback = self.connection.add_callback(self.protocol.runtime.BindingCalled, self.receive)
         self.connection.execute(self.protocol.runtime.enable())
         self.connection.execute(self.protocol.runtime.add_binding('__flowtape_emit'))
+        if self.trace.enabled:
+            self.connection.execute(self.protocol.runtime.add_binding('__flowtape_trace'))
 
     def receive(self, notification):
+        if notification.name == '__flowtape_trace':
+            try:
+                data = json.loads(notification.payload)
+                self.trace.browser(data)
+            except (ValueError, TypeError, KeyError, AttributeError):
+                self.trace.write('trace_invalid')
+            return
         if notification.name != '__flowtape_emit': return
         try: event = json.loads(notification.payload)
         except (ValueError, TypeError):
@@ -43,6 +54,7 @@ class CaptureBridge:
             self.invalid = True
             return
         event.setdefault('window_context', {})['handle'] = self.handle
+        self.trace.event('cdp_binding', event)
         with self.lock:
             if len(self.events) >= 1000:
                 self.overflow = True
@@ -59,6 +71,8 @@ class CaptureBridge:
             if self.overflow: raise FlowTapeError('Recorder transport overflow; recording desynchronized')
             if self.invalid: raise FlowTapeError('Recorder transport received an invalid protocol event')
             result, self.events = self.events, []
+        for event in result:
+            self.trace.event('cdp_drain', event)
         return result
 
     def close(self):
@@ -66,6 +80,8 @@ class CaptureBridge:
             if self.script_id is not None:
                 self.connection.execute(self.protocol.page.remove_script_to_evaluate_on_new_document(self.script_id))
             self.connection.execute(self.protocol.runtime.remove_binding('__flowtape_emit'))
+            if self.trace.enabled:
+                self.connection.execute(self.protocol.runtime.remove_binding('__flowtape_trace'))
         finally:
             self.connection.remove_callback(self.protocol.runtime.BindingCalled, self.callback)
             self.connection.close()

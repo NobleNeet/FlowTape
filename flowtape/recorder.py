@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass
 from importlib.resources import files
 from time import monotonic
@@ -13,6 +14,7 @@ from .browser import Resolver
 from .capture_bridge import CaptureBridge
 from .windows import WindowContext
 from .errors import FlowTapeError, UnsupportedOperationError
+from .recorder_trace import RecorderTrace
 
 OBSERVER_JS = files("flowtape").joinpath("observer.js").read_text(encoding="utf-8")
 DYNAMIC_ID = re.compile(r"(?:[a-f0-9]{8}-[a-f0-9-]{20,}|[a-f0-9]{12,}|\d{6,}|(?:css|mui|react|ember)[-_][a-f0-9]{5,}|:r\d+:)", re.I)
@@ -29,18 +31,30 @@ class Operation:
     document_id: str | None = None
     element_ref: int | None = None
     handle: str | None = None
+    event_seq: int | None = None
 
 
 class EventNormalizer:
-    def __init__(self, double_click_window: float = .35):
+    def __init__(self, double_click_window: float = .35, trace=None):
+        self.trace = trace or RecorderTrace()
         self.last_seq: dict[str, int] = {}
         self.pending_clicks: list[tuple[float, dict]] = []
         self.window = double_click_window
+
+    @staticmethod
+    def operation(event, action, value=None, data=None):
+        target = event.get('target') or {}
+        snapshot = target.get('snapshot')
+        return Operation(action, snapshot, value, data,
+                         (event.get('window_context', {}).get('frame_path') or []) + (snapshot or {}).get('shadow_path', []),
+                         event.get('document', {}).get('url'), event.get('document_instance_id'),
+                         target.get('element_ref'), event.get('window_context', {}).get('handle'), event.get('event_seq'))
 
     def consume(self, events: list[dict], now: float | None = None) -> list[Operation]:
         now = monotonic() if now is None else now
         out = []
         for event in events:
+            self.trace.event('normalizer_receive', event)
             if event.get("protocol_version") != 1:
                 raise FlowTapeError("Recorder protocol version mismatch")
             doc = event["document_instance_id"]
@@ -48,6 +62,7 @@ class EventNormalizer:
             if doc not in self.last_seq and seq != 1:
                 raise FlowTapeError('Recorder event sequence has no established start boundary')
             if seq <= self.last_seq.get(doc, 0):
+                self.trace.event('normalizer_duplicate', event)
                 continue
             if doc in self.last_seq and seq != self.last_seq[doc] + 1:
                 raise FlowTapeError("Recorder event sequence gap")
@@ -56,7 +71,6 @@ class EventNormalizer:
             if typ=='unsupported':
                 raise UnsupportedOperationError('Recorder operation unsupported: ' + event.get('data',{}).get('reason','unknown'))
             snap = (event.get("target") or {}).get("snapshot")
-            context = event.get("window_context", {}).get("frame_path", [])
             if typ == "click":
                 out.extend(self.flush(now))
                 self.pending_clicks.append((now, event))
@@ -70,28 +84,22 @@ class EventNormalizer:
                 self.pending_clicks = unrelated
                 out.extend(self.flush(now, force=True))
                 self.pending_clicks.clear()
-                out.append(Operation("double_click", snap, context=context, url=event.get("document", {}).get("url")))
+                out.append(self.operation(event, 'double_click'))
             elif typ == "input_commit":
                 out.extend(self.flush(now, force=True))
                 data = event.get("data", {})
-                out.append(Operation("input", snap, None if data.get("secret") else data.get("value"), data, context, event.get("document", {}).get("url")))
+                out.append(self.operation(event, 'input', None if data.get('secret') else data.get('value'), data))
             elif typ == "select":
                 out.extend(self.flush(now, force=True))
-                out.append(Operation("select", snap, event.get("data", {}).get("text"), event.get("data"), context, event.get("document", {}).get("url")))
+                out.append(self.operation(event, 'select', event.get('data', {}).get('text'), event.get('data')))
             elif typ == "key":
                 out.extend(self.flush(now, force=True))
-                out.append(Operation("key", snap, event.get("data", {}).get("key"), event.get("data"), context, event.get("document", {}).get("url")))
+                out.append(self.operation(event, 'key', event.get('data', {}).get('key'), event.get('data')))
             elif typ == "pick":
-                out.append(Operation("pick", snap, context=context, url=event.get("document", {}).get("url")))
-            elif typ == 'picker_cancel': out.append(Operation('picker_cancel'))
+                out.append(self.operation(event, 'pick'))
+            elif typ == 'picker_cancel': out.append(self.operation(event, 'picker_cancel'))
         for op in out:
-            if op.snapshot is not None and op.document_id is None:
-                source = next((event for event in reversed(events) if (event.get('target') or {}).get('snapshot') == op.snapshot), None)
-                if source:
-                    op.document_id = source['document_instance_id']
-                    op.element_ref = source['target'].get('element_ref')
-                    op.context = (op.context or []) + op.snapshot.get('shadow_path', [])
-                    op.handle = source.get('window_context', {}).get('handle')
+            self.trace.operation('normalizer_operation', op)
         return out
 
     def flush(self, now: float | None = None, force: bool = False) -> list[Operation]:
@@ -99,8 +107,9 @@ class EventNormalizer:
         ready = []
         while self.pending_clicks and (force or now - self.pending_clicks[0][0] >= self.window):
             _, event = self.pending_clicks.pop(0)
-            snapshot = event['target']['snapshot']
-            ready.append(Operation("click", snapshot, context=(event.get("window_context", {}).get("frame_path") or []) + snapshot.get('shadow_path', []), url=event.get("document", {}).get("url"), document_id=event['document_instance_id'], element_ref=event['target'].get('element_ref'), handle=event.get('window_context', {}).get('handle')))
+            op = self.operation(event, 'click')
+            ready.append(op)
+            self.trace.operation('normalizer_click_flush', op)
         return ready
 
 
@@ -202,6 +211,20 @@ def propose_target(snapshot: dict, *, resolver: Resolver | None = None, context=
     return definition
 
 
+def captured_target(operation):
+    """Accept only candidates proven unique at the original event boundary.
+
+    Stage 1 evidence can survive navigation; it never proves anything about
+    the destination DOM. Frame/shadow captures still require live verification.
+    """
+    evidence = (operation.snapshot or {}).get('capture', {})
+    if operation.context or evidence.get('document_id') != operation.document_id:
+        return None
+    definition = propose_target(operation.snapshot)
+    definition['locate'] = [loc for loc in definition['locate'] if loc in evidence.get('locate', [])]
+    return definition if definition['locate'] else None
+
+
 def propose_collections(operation, resolver):
     definition = {'context':operation.context or []}
     scope = resolver._context(definition)
@@ -230,17 +253,28 @@ def propose_collections(operation, resolver):
 class RecorderTransport:
     def __init__(self, driver):
         self.driver = driver
-        self.normalizer = EventNormalizer()
+        self.trace = RecorderTrace.from_environment()
+        self.normalizer = EventNormalizer(trace=self.trace)
         self.mode = "observe"
         self.bridges = {}
         self.documents = {}
         self.windows = WindowContext(driver)
+        self.page_conditions = {}
+
+    def set_pages(self, pages):
+        conditions = {name: page['identify'] for name, page in pages.items()}
+        if conditions == self.page_conditions:
+            return
+        self.page_conditions = conditions
+        for bridge in self.bridges.values():
+            self._configure_bridge(bridge)
 
     def _visit(self, collect: bool = False, flush: bool = False, boundary: bool = False, reset: bool = False):
         events = []
         def traverse(path: list[dict]):
             try:
-                baseline = self.driver.execute_script(DOM_JS + "\n" + OBSERVER_JS + "\nconst boundary={id:window.__flowtape.documentInstanceId,seq:window.__flowtape.sequence};window.__flowtape.setMode(arguments[0]);window.__flowtape.framePath=arguments[1];return boundary;", self.mode, path)
+                baseline = self.driver.execute_script(DOM_JS + "\n" + OBSERVER_JS + "\nconst boundary={id:window.__flowtape.documentInstanceId,seq:window.__flowtape.sequence};window.__flowtape.traceEnabled=arguments[2];window.__flowtape.pageConditions=arguments[3];window.__flowtape.setMode(arguments[0]);window.__flowtape.framePath=arguments[1];return boundary;", self.mode, path, self.trace.enabled, self.page_conditions)
+                self.trace.write('transport_document', document_id=baseline['id'], event_seq=baseline['seq'], mode=self.mode, frame_depth=len(path))
                 if boundary: self.normalizer.last_seq[baseline['id']] = baseline['seq']
                 self.documents[baseline['id']] = {'frame_path':path, 'handle':self.driver.current_window_handle}
                 if reset:
@@ -248,10 +282,16 @@ class RecorderTransport:
                 if flush:
                     self.driver.execute_script("window.__flowtape.flushInput();window.__flowtape.setMode('observe');")
                 if collect:
+                    if self.trace.enabled:
+                        for record in self.driver.execute_script('return window.__flowtape.drainTraces();'):
+                            self.trace.browser(record)
+                        if self.driver.execute_script('return window.__flowtape.traceOverflow;'):
+                            self.trace.write('trace_overflow', reason='diagnostic_queue_overflow')
                     batch = self.driver.execute_script("return window.__flowtape.drain();")
                     if self.driver.execute_script("return !!window.__flowtape.overflow;"):
                         raise FlowTapeError("Recorder queue overflow; recording desynchronized")
                     for event in batch:
+                        self.trace.event('transport_poll', event)
                         event['window_context'] = {'frame_path':path, 'handle':self.driver.current_window_handle}
                     events.extend(batch)
                 frames = self.driver.execute_script(DOM_JS + '\nreturn FT.frames();')
@@ -278,7 +318,7 @@ class RecorderTransport:
         for handle in self.driver.window_handles:
             self.driver.switch_to.window(handle)
             if handle not in self.bridges:
-                self.bridges[handle] = CaptureBridge(self.driver, handle)
+                self.bridges[handle] = CaptureBridge(self.driver, handle, trace=self.trace)
                 self._configure_bridge(self.bridges[handle])
             self._attach_frames(self.bridges[handle])
             self.driver.switch_to.default_content()
@@ -294,6 +334,8 @@ class RecorderTransport:
                     if known: event['window_context'] = known.copy()
                     by_identity.setdefault((event['document_instance_id'],event['event_seq']), event)
             events = sorted(by_identity.values(), key=lambda e:(e['timestamp'], e['event_seq']))
+            for event in events:
+                self.trace.event('transport_merged', event)
             if any(e.get('window_context',{}).get('frame_path') is None for e in events):
                 raise FlowTapeError('frame navigation event has no verified frame path; recording desynchronized')
         return events
@@ -305,14 +347,15 @@ class RecorderTransport:
         for target in targets:
             identity = str(target.target_id)
             if target.type_=='iframe' and identity not in self.bridges:
-                bridge=CaptureBridge(self.driver,None,target_id=identity)
+                bridge=CaptureBridge(self.driver,None,target_id=identity,trace=self.trace)
                 self.bridges[identity]=bridge
                 self._configure_bridge(bridge)
 
     def _configure_bridge(self, bridge):
-        bridge.configure('(()=>{' + DOM_JS + '\n' + OBSERVER_JS + '\nwindow.__flowtape.setMode(' + repr(self.mode) + ');})();')
+        bridge.configure('(()=>{' + DOM_JS + '\n' + OBSERVER_JS + '\nwindow.__flowtape.traceEnabled=' + str(self.trace.enabled).lower() + ';window.__flowtape.pageConditions=' + json.dumps(self.page_conditions) + ';window.__flowtape.setMode(' + repr(self.mode) + ');})();')
 
     def inject(self, mode: str = "record"):
+        self.trace.write('recorder_boundary', mode=mode)
         self.mode = mode
         for bridge in self.bridges.values(): self._configure_bridge(bridge)
         self._visit(boundary=True)
@@ -342,6 +385,7 @@ class RecorderTransport:
                     raise UnsupportedOperationError('window switch cannot be represented as newest or parent')
                 self.windows.active = handle
             result.append(op)
+            self.trace.operation('transport_operation', op)
         return result
 
     def stop(self):

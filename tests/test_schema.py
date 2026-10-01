@@ -154,3 +154,57 @@ def test_select_schema_rejects_invalid_selection(fields):
     with pytest.raises(ScenarioValidationError):
         schema.scenario({'version': 1, 'name': 'select', 'steps': [
             {'action': 'select', 'target': '色', **fields}]})
+
+
+def test_event_normalizer_keeps_each_source_identity_with_identical_snapshots():
+    snap = {'tag': 'select', 'shadow_path': []}
+    base = {'protocol_version': 1, 'document_instance_id': 'doc', 'type': 'select',
+            'document': {'url': 'https://test/'}, 'window_context': {'handle': 'window', 'frame_path': []}}
+    events = [base | {'event_seq': index, 'target': {'snapshot': snap, 'element_ref': index},
+                      'data': {'text': value}} for index, value in enumerate(['A', 'B'], 1)]
+    operations = EventNormalizer().consume(events)
+    assert [(op.value, op.document_id, op.element_ref, op.event_seq) for op in operations] == [
+        ('A', 'doc', 1, 1), ('B', 'doc', 2, 2)]
+
+
+def test_recorder_trace_never_persists_capture_payload(tmp_path):
+    import json
+    from flowtape.recorder_trace import RecorderTrace
+    trace = RecorderTrace(tmp_path / 'trace.jsonl')
+    trace.write('observer_input', tag='input', input_type='password', trusted=True,
+                value='secret', snapshot={'value': 'secret'}, url='https://private/', name='secret')
+    trace.event('transport_merged', {'document_instance_id': 'doc', 'event_seq': 1, 'type': 'input_commit',
+                                   'target': {'snapshot': {'name': 'secret'}}, 'data': {'value': 'secret'}})
+    content = trace.path.read_text()
+    assert 'secret' not in content and 'private' not in content
+    rows = [json.loads(line) for line in content.splitlines()]
+    assert rows[0]['trusted'] is True and rows[1]['event_seq'] == 1
+    assert RecorderTrace().write('disabled') is None
+
+
+def test_source_capture_requires_stable_proven_candidate_and_matching_document():
+    from flowtape.recorder import Operation, captured_target
+    snapshot = {'tag': 'a', 'role': 'link', 'name': '次へ', 'attributes': {'id': '99999999'},
+                'capture': {'document_id': 'source', 'locate': [{'by': 'id', 'value': '99999999'}]}}
+    op = Operation('click', snapshot=snapshot, document_id='source')
+    assert captured_target(op) is None  # Source uniqueness does not make dynamic IDs stable.
+    snapshot['capture']['locate'].append({'by': 'role', 'role': 'link', 'name': '次へ'})
+    assert captured_target(op)['locate'] == [{'by': 'role', 'role': 'link', 'name': '次へ'}]
+    op.document_id = 'other'
+    assert captured_target(op) is None
+    op.document_id = 'source'
+    op.context = [{'shadow': {'css': '#unverified'}}]
+    assert captured_target(op) is None
+
+
+def test_recorder_trace_merges_browser_delivery_copies(tmp_path):
+    from flowtape.recorder_trace import RecorderTrace
+    trace = RecorderTrace(tmp_path / 'trace.jsonl')
+    data = {'stage': 'observer_input', 'document_id': 'doc', 'trace_seq': 1, 'event_seq': 0,
+            'type': 'input', 'trusted': True, 'value': 'secret'}
+    trace.browser(data)
+    trace.browser(data)
+    assert len(trace.path.read_text().splitlines()) == 1
+    assert 'secret' not in trace.path.read_text()
+    trace.browser(data | {'stage': 'invalid'})
+    assert len(trace.path.read_text().splitlines()) == 1

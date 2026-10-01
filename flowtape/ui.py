@@ -23,7 +23,7 @@ from .persistence import save_package, journal_path, recover_package
 from .player import Player
 from .playback import PlaybackController
 from .qt_playback import PlaybackWorker
-from .recorder import RecorderTransport, propose_target, propose_collections
+from .recorder import RecorderTransport, propose_target, propose_collections, captured_target
 from .identity import ulid
 from .authoring import referenced_targets
 from .lifecycle import Preferences, create_package
@@ -33,6 +33,7 @@ from .desktop_dialogs import (NewScenarioDialog, SettingsDialog, CredentialSelec
 from .login_authoring import InputEvidence, username_candidate
 from .ui_surface import build_surface, update_surface
 from .browser_setup import BrowserSetupDialog
+from .recorder_trace import RecorderTrace
 
 
 def recorder_boundary(method):
@@ -80,6 +81,7 @@ class FlowTapeWindow(QMainWindow):
         self.operation_queue = []
         self.input_evidence = {}
         self.recorder_error = None
+        self.recorder_trace = RecorderTrace.from_environment()
         self.record_position = None
         self.binding_name = None
         self.pending_read = None
@@ -658,6 +660,8 @@ class FlowTapeWindow(QMainWindow):
             return False
         self._checkpoint()
         self.scenario, self.registry = trial, registry
+        if isinstance(self.transport, RecorderTransport):
+            self.transport.set_pages(registry['pages'])
         if self.controller: self.controller.player.resolver.pages = registry["pages"]
         self._changed()
         return True
@@ -976,6 +980,8 @@ class FlowTapeWindow(QMainWindow):
         try:
             self.driver = open_edge(self.config)
             self.transport = RecorderTransport(self.driver)
+            if self.registry is not None:
+                self.transport.set_pages(self.registry['pages'])
             self.transport.inject('observe')
             self.controller = None
             self.confirmed_destructive = self.record_after_play = False
@@ -1017,6 +1023,8 @@ class FlowTapeWindow(QMainWindow):
         self.just_recorded = False
         self.recording = True
         self.picking = False
+        if isinstance(self.transport, RecorderTransport):
+            self.transport.set_pages(self.registry['pages'])
         self.transport.inject("record")
         self.status.setText("記録中 — Edgeを操作してください")
         self.update_actions()
@@ -1045,7 +1053,9 @@ class FlowTapeWindow(QMainWindow):
 
     def _process_operations(self):
         while self.operation_queue and self.pending_operation is None:
-            self._operation(self.operation_queue.pop(0))
+            op = self.operation_queue.pop(0)
+            self.recorder_trace.operation('ui_dequeue', op, queue_size=len(self.operation_queue))
+            self._operation(op)
         if not self.recording and not self.operation_queue and not self.pending_operation:
             self.record_position = None
 
@@ -1144,9 +1154,12 @@ class FlowTapeWindow(QMainWindow):
         try:
             for op in self.transport.drain():
                 if op.action in {'pick','picker_cancel'}: self._operation(op)
-                else: self.operation_queue.append(op)
+                else:
+                    self.operation_queue.append(op)
+                    self.recorder_trace.operation('ui_enqueue', op, queue_size=len(self.operation_queue))
             self._process_operations()
         except Exception as exc:
+            self.recorder_trace.write('ui_error', reason=type(exc).__name__)
             self.recording = self.picking = False
             self.recorder_error = str(exc)
             self.status.setText("記録停止: " + str(exc))
@@ -1208,6 +1221,86 @@ class FlowTapeWindow(QMainWindow):
             if not self._commit_edit(copy.deepcopy(self.scenario),trial): return None
             return page_id
 
+    @staticmethod
+    def _source_url_condition(condition, url):
+        op, value = next(iter(condition.items()))
+        if op == 'url':
+            mode, expected = next(iter(value.items()))
+            return url == expected if mode == 'equals' else expected in url if mode == 'contains' else url.startswith(expected)
+        if op == 'exists': return None
+        if op == 'not':
+            result = FlowTapeWindow._source_url_condition(value, url)
+            return None if result is None else not result
+        results = [FlowTapeWindow._source_url_condition(child, url) for child in value]
+        if op == 'all':
+            return False if False in results else None if None in results else True
+        return True if True in results else None if None in results else False
+
+    def _captured_page_matches(self, op, pages):
+        evidence = op.snapshot['capture']
+        matches = []
+        for name, page in pages.items():
+            if evidence.get('page_conditions', {}).get(name) == page['identify']:
+                result = name in evidence.get('pages', [])
+            else:
+                result = self._source_url_condition(page['identify'], op.url)
+            if result is None:
+                raise UnknownPage('遷移前のページ条件を確定できません。操作前ページで確認してください')
+            if result: matches.append(name)
+        if len(matches) > 1:
+            raise AmbiguousPage('遷移前のページが複数のPageDefinitionに一致します')
+        return matches
+
+    def _commit_source_click(self, op):
+        if op.action not in {'click', 'double_click'}:
+            return False
+        definition = captured_target(op)
+        if definition is None:
+            return False
+        try:
+            pages = self._captured_page_matches(op, self.registry['pages'])
+            if not pages:
+                parsed = urlsplit(op.url)
+                proposed = Path(parsed.path).stem or parsed.netloc or 'page'
+                dialog = PageRegistrationDialog(self, proposed, {'url': {'equals': op.url}})
+                dialog.setWindowTitle('操作したページを登録')
+                if dialog.exec() != QDialog.DialogCode.Accepted: return False
+                page_id = dialog.name.text().strip()
+                trial = copy.deepcopy(self.registry)
+                if page_id in trial['pages']:
+                    raise AmbiguousPage('既存のpage IDです')
+                trial['pages'][page_id] = {'identify': dialog.identify, 'elements': {}}
+                if self._captured_page_matches(op, trial['pages']) != [page_id]:
+                    raise UnknownPage('遷移前のURLに一致するページ条件を指定してください')
+                if not self._commit_edit(copy.deepcopy(self.scenario), trial): return False
+            else:
+                page_id = pages[0]
+            # A source-verified locator and identical expectations prove reuse;
+            # destination elements must never participate in this decision.
+            reusable = [name for name, old in self.registry['pages'][page_id].get('elements', {}).items()
+                        if not old.get('context') and old.get('kind') == definition['kind']
+                        and old.get('expect', {}) == definition.get('expect', {})
+                        and any(loc in op.snapshot['capture']['locate'] for loc in old['locate'])]
+            if len(reusable) == 1:
+                name = reusable[0]
+                definition = copy.deepcopy(self.registry['pages'][page_id]['elements'][name])
+            else:
+                proposed = op.snapshot.get('label') or op.snapshot.get('name') or '対象'
+                if reusable:
+                    name, ok = QInputDialog.getItem(self, 'Target', '遷移前の対象名を選択', reusable, editable=False)
+                else:
+                    name, ok = QInputDialog.getText(self, '操作の対象', '操作した対象の名前', text=proposed)
+                if not ok or not name: return False
+                if name in self.registry['pages'][page_id].get('elements', {}) and name not in reusable:
+                    raise FlowTapeError('同名の対象を確認できません。別の対象名を指定してください')
+            self.recorder_trace.operation('ui_source_verified', op)
+            self._commit_recorded_operation(op, page_id, name, definition)
+            return self.pending_operation is None
+        except (FlowTapeError, AmbiguousPage, UnknownPage) as exc:
+            self.recorder_trace.operation('ui_pending', op, reason='source_evidence_unavailable')
+            QMessageBox.warning(self, '遷移前の対象', str(exc))
+            return False
+
     def _operation(self, op):
         if op.action == 'picker_cancel':
             self.picking = False
@@ -1239,15 +1332,27 @@ class FlowTapeWindow(QMainWindow):
             aliases = {'Escape':'ESCAPE', 'ArrowUp':'ARROW_UP', 'ArrowDown':'ARROW_DOWN', 'ArrowLeft':'ARROW_LEFT', 'ArrowRight':'ARROW_RIGHT', 'Enter':'ENTER', 'Tab':'TAB'}
             key = aliases.get(op.value, op.value)
             modifiers = [name for field, name in [('ctrl','CONTROL'),('alt','ALT'),('meta','META'),('shift','SHIFT')] if (op.data or {}).get(field)]
-            if key in {'Control', 'Alt', 'Meta', 'Shift'}: return
+            if key in {'Control', 'Alt', 'Meta', 'Shift'}:
+                self.recorder_trace.operation('ui_ignored', op, reason='modifier_only')
+                return
             node = {'action':'key', '_meta':{'id':ulid()}}
             if modifiers: node['keys'] = modifiers + [key]
             else: node['key'] = key
-            self._insert_node(node, recording=True)
+            if self._insert_node(node, recording=True):
+                self.recorder_trace.operation('ui_committed', op)
             return
         if op.action not in {"click", "double_click", "input", "select", "pick"}: return
         if op.action != 'pick': self.pending_operation = op
+        # Event-boundary proof avoids a race where navigation completes in
+        # between a current-URL check and the subsequent live target lookup.
+        if op.action in {'click', 'double_click'} and captured_target(op) is not None:
+            if self._commit_source_click(op): return
+            self.recording = False
+            self.transport.inject('observe')
+            self.status.setText('操作時のページ／対象の確定待ちです')
+            return
         if op.url and self.driver.current_url != op.url:
+            self.recorder_trace.operation('ui_pending', op, reason='source_page_changed')
             self.pending_operation = op
             self.recording = False
             self.transport.inject('observe')
@@ -1255,6 +1360,7 @@ class FlowTapeWindow(QMainWindow):
             return
         page_id = self._page()
         if not page_id:
+            self.recorder_trace.operation('ui_pending', op, reason='page_registration')
             self.status.setText("ページ登録待ちで停止")
             self.recording = False
             self.transport.inject('observe')
@@ -1268,6 +1374,7 @@ class FlowTapeWindow(QMainWindow):
             definition = propose_target(op.snapshot, resolver=Resolver(self.driver, self.registry), context=op.context,
                                         document_id=op.document_id, element_ref=op.element_ref)
         except Exception as exc:
+            self.recorder_trace.operation('ui_pending', op, reason='target_capture_unavailable')
             QMessageBox.warning(self, 'Target', str(exc))
             return
         if op.context:
@@ -1367,6 +1474,7 @@ class FlowTapeWindow(QMainWindow):
                 sequences(trial)[key].insert(index,node)
             else: trial['steps'].append(node)
         if not self._commit_edit(trial,registry): return
+        self.recorder_trace.operation('ui_committed', op, step_id=node['_meta']['id'] if op.action != 'pick' else None)
         if op.action=='input' and not (op.data or {}).get('secret'):
             self.input_evidence[node['_meta']['id']]=InputEvidence(op,name,op.value)
         if op.action != 'pick' and self.record_position:

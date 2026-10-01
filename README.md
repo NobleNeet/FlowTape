@@ -109,3 +109,18 @@ PYTHONPATH=. .venv/bin/python scripts/smoke_select.py --driver /absolute/path/to
 ```
 
 スモーク確認は画面表示ありの Qt／Edge で選択操作を記録・保存し、トップページから2回再生して5つの選択結果を検証します。実行用設定・記録済みパッケージ・画面・結果は `build/select-smoke/acceptance/` に保存します。公開サイトのテストは通常の少数回の操作に限ります。
+
+### RecorderのOS入力による検証
+
+`scripts/smoke_select.py` はSelenium経由の選択操作の統合確認です。実ユーザー入力の受入条件には使いません。Linux X11のマウス／キーボード入力からStep追加までの確認は次で行います。
+
+```bash
+.venv/bin/python -m pip install -e '.[ui,test,native-test]'
+PYTHONPATH=. .venv/bin/python scripts/smoke_recorder_native.py \
+  --driver /absolute/path/to/msedgedriver --case navigation --count 10 \
+  --artifacts build/native-recorder/new-navigation-run
+```
+
+通常クリック、文字入力、checkbox（labelも含む）、single select、Ctrl+multi select、リンク遷移を各10回連続入力し、値・順序・信頼済み入力と各配送段階を照合します。radioは公式Seleniumサンプルで補足します。入力のリトライやDOM直接操作での補正は行いません。IBusは英字の直接入力へ一時切替し、終了時に元のengineへ戻します。詳細は [実入力試験の監査と結果](docs/testing/recorder-native-input.md) を参照してください。
+
+通常起動でも `FLOWTAPE_RECORDER_TRACE=/absolute/path/trace.jsonl` を指定すると、値を含まないRecorderの段階別診断を有効にできます。診断は通常のシナリオやregistryへ入りません。

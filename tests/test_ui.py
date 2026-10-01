@@ -86,3 +86,84 @@ def test_destructive_confirmation_policy_and_cancel(tmp_path):
         question.assert_not_called()
     window.worker=None
     window.close()
+
+
+def test_navigation_click_commits_source_proof_without_destination_lookup(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from PySide6.QtWidgets import QDialog
+    from flowtape.desktop_dialogs import PageRegistrationDialog
+    from flowtape.recorder import Operation
+    app = QApplication.instance() or QApplication([])
+    source = tmp_path / 'scenario.yaml'
+    save_yaml(source, {'version': 1, 'name': 'source', 'steps': []})
+    save_yaml(tmp_path / 'elements.yaml', {'version': 1, 'pages': {}})
+    window = FlowTapeWindow(str(source), preferences_path=tmp_path / 'preferences.json')
+    window.driver = SimpleNamespace(current_url='https://test/destination',
+                                    execute_script=Mock(side_effect=AssertionError('destination DOM must not be used')))
+    window.transport = Mock()
+    window.recording = True
+    snapshot = {'tag': 'a', 'role': 'link', 'name': '次へ', 'attributes': {}, 'capture': {
+        'document_id': 'old', 'locate': [{'by': 'role', 'role': 'link', 'name': '次へ'}],
+        'page_conditions': {}, 'pages': []}}
+    op = Operation('click', snapshot=snapshot, url='https://test/source', document_id='old')
+    def register(dialog):
+        dialog.validate()
+        return QDialog.DialogCode.Accepted
+    try:
+        with patch.object(PageRegistrationDialog, 'exec', register), patch('flowtape.ui.QInputDialog.getText', return_value=('次へ', True)):
+            window._operation(op)
+        assert window.recording and window.pending_operation is None
+        assert window.scenario['steps'][0]['target'] == '次へ'
+        assert window.registry['pages']['source']['identify'] == {'url': {'equals': 'https://test/source'}}
+        assert window.registry['pages']['source']['elements']['次へ']['locate'] == snapshot['capture']['locate']
+        window._operation(op)
+        assert len(window.scenario['steps']) == 2
+        window.driver.execute_script.assert_not_called()
+        # A newly introduced DOM-dependent source condition cannot be guessed.
+        window.registry['pages']['unconfirmed'] = {'identify': {'exists': {'id': 'missing'}}, 'elements': {}}
+        with patch('flowtape.ui.QMessageBox.warning'):
+            window._operation(op)
+        assert not window.recording and window.pending_operation is op
+        assert len(window.scenario['steps']) == 2
+    finally:
+        window.driver = None
+        window.transport = None
+        window.pending_operation = None
+        window.recording = False
+        window.dirty = False
+        window.close()
+
+
+def test_cancel_source_registration_retains_click_without_reprompt(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from PySide6.QtWidgets import QDialog
+    from flowtape.desktop_dialogs import PageRegistrationDialog
+    from flowtape.recorder import Operation
+    app = QApplication.instance() or QApplication([])
+    source = tmp_path / 'scenario.yaml'
+    save_yaml(source, {'version': 1, 'name': 'cancel', 'steps': []})
+    save_yaml(tmp_path / 'elements.yaml', {'version': 1, 'pages': {}})
+    window = FlowTapeWindow(str(source), preferences_path=tmp_path / 'preferences.json')
+    window.driver = SimpleNamespace(current_url='https://test/source')
+    window.transport = Mock()
+    window.recording = True
+    snapshot = {'tag': 'a', 'role': 'link', 'name': '次へ', 'attributes': {}, 'capture': {
+        'document_id': 'source', 'locate': [{'by': 'role', 'role': 'link', 'name': '次へ'}],
+        'page_conditions': {}, 'pages': []}}
+    op = Operation('click', snapshot=snapshot, url=window.driver.current_url, document_id='source')
+    try:
+        with patch.object(PageRegistrationDialog, 'exec', return_value=QDialog.DialogCode.Rejected) as dialog, \
+             patch('flowtape.ui.QInputDialog.getText') as name:
+            window._operation(op)
+        dialog.assert_called_once()
+        name.assert_not_called()
+        assert not window.recording and window.pending_operation is op
+        assert window.scenario['steps'] == [] and window.registry['pages'] == {}
+        window.transport.inject.assert_called_once_with('observe')
+    finally:
+        window.driver = window.transport = None
+        window.pending_operation = None
+        window.recording = window.dirty = False
+        window.close()

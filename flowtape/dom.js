@@ -76,6 +76,42 @@ const FT = {
     });
   },
   semantic(scope, s) { return this.all(scope).filter(el => this.match(el,s)); },
+  pageCondition(condition) {
+    const [op,val]=Object.entries(condition)[0];
+    if(op==='url') {
+      const [mode,expected]=Object.entries(val)[0];
+      return mode==='equals'?location.href===expected:mode==='contains'?location.href.includes(expected):location.href.startsWith(expected);
+    }
+    if(op==='exists')return this.semantic(document,val).length>0;
+    if(op==='all')return val.every(x=>this.pageCondition(x));
+    if(op==='any')return val.some(x=>this.pageCondition(x));
+    return !this.pageCondition(val);
+  },
+  captureEvidence(el, snapshot, documentId, pageConditions) {
+    const candidates=[];
+    for(const attribute of ['data-testid','data-test','data-cy','data-qa']) {
+      if(snapshot.attributes[attribute])candidates.push({by:'testid',value:snapshot.attributes[attribute]});
+    }
+    if(el.id)candidates.push({by:'id',value:el.id});
+    if(snapshot.role && snapshot.name)candidates.push({by:'role',role:snapshot.role,name:snapshot.name});
+    if(snapshot.label)candidates.push({by:'label',value:snapshot.label});
+    if(snapshot.attributes.name)candidates.push({by:'name',value:snapshot.attributes.name});
+    if(snapshot.attributes.placeholder)candidates.push({by:'placeholder',value:snapshot.attributes.placeholder});
+    if(snapshot.text && snapshot.text.length<80)candidates.push({by:'text',value:snapshot.text,exact:true});
+    const tag=snapshot.tag,type=snapshot.attributes.type,role=snapshot.role;
+    let kind=type==='file'?'file':tag==='input' && ['checkbox','radio'].includes(type)?type:tag==='input'?'input':
+      ['textarea','select'].includes(tag)?tag:['button','link','checkbox','radio','tab'].includes(role)?role:'element';
+    if(tag==='input' && role==='button' && type!=='file')kind='button';
+    const expect=['button','link','checkbox','radio','tab'].includes(kind)?{role}:{tag};
+    if(['input','textarea'].includes(kind) || snapshot.editable)expect.editable=true;
+    if(kind==='input' && type)expect.input_type=type;
+    const locate=candidates.filter(loc=>{
+      const matches=this.locate(el.getRootNode(),loc).filter(e=>this.accepts(e,expect,'click',kind));
+      return matches.length===1 && matches[0]===el;
+    });
+    return {document_id:documentId,locate,page_conditions:pageConditions,
+      pages:Object.entries(pageConditions).filter(([id,condition])=>this.pageCondition(condition)).map(([id])=>id)};
+  },
   locate(scope, loc) {
     const by = loc.by, value = loc.value;
     if (by === 'css') return [...scope.querySelectorAll(value)];
