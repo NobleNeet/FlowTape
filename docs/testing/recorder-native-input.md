@@ -93,3 +93,23 @@ WindowsのOS入力・日本語IME経路・PyInstaller配布物は今回の受入
 | 既存テスト一式 | 最終pytest結果をIMPLEMENTATION_STATUSへ記載 |
 
 実入力の最終成果物はGitに含めず、再現スクリプト・原因回帰テスト・仕様をcommitします。元のbrowser profileやOSの設定を永続変更せず、終了時にIBusのengine一致を確認しました。
+
+## 録画開始後のアドレスバーからのURL入力
+
+以前のnavigationケースはリンククリックの記録を検証しており、アドレスバー入力は録画開始前のセットアップでした。そのため、録画開始後にサイトを直接開く操作が抜ける問題を検出できていませんでした。追加した `--case address_open` は、空のブラウザ状態で録画を開始してからOS入力でURLを開きます。
+
+旧コミットを隔離worktreeで実行した `build/native-recorder/address-baseline-normal2/report.json` では、サイトは表示されたのに `open` が0件で失敗しました。ページJavaScriptがアドレスバーを観測できないことに加え、Python側にブラウザのナビゲーションをSemanticNavigationOperationへ変換する実装がありませんでした。
+
+修正はCDPのtop-level navigation lifecycleを配送順のまま観測し、renderer起因ではない確定した `differentDocument` の遷移を `open` へ変換します。元の要求URLを保持し、server redirectは一つの操作にまとめます。リンク・フォーム・scriptによる遷移、iframe、録画外の開始、キャンセル、失敗、分類できないhistory/reloadには直接URL入力の `open` を推測しません。ブラウザへのアドレス入力のためのCtrl/Meta+L・Alt+Dは入力確定だけを行い、不要なDOM key Stepを残しません。FlowTape自身のURLコマンドは前の記録を確定し、明示openとCDP観測の二重記録を防ぎます。
+
+途中の試験では、遷移で消えたcross-origin iframeのCDP sessionへの再設定が録画終了時に失敗する問題も確認しました。対象の消滅を確認して再設定を止め、既に受け取ったStage 1イベントは引き続きdrainします。生存するTargetの設定失敗は握りつぶしません。native試験は録画終了後のrecorder_error/pending/queueも検査し、途中の試験結果を最終合格として扱いません。
+
+| 最終試験 | 結果 | 証拠 |
+|---|---|---|
+| 録画開始後、アドレスバーでPlaygroundトップ/Text Inputを10回開く | open 10件、余分なkey Stepなし、欠落0・リトライ0 | `build/native-recorder/address-ordered-final/` |
+| 保存したopenシナリオを空ページからPlayerで再生 | 成功、最後のURL一致 | 同reportのreplayed=true |
+| OSマウスでPlaygroundのリンクを10回往復 | click 10件、重複open 0件、欠落0・リトライ0 | `build/native-recorder/address-link-ordered-final/` |
+
+アドレスバーケースはブラウザchromeを操作するためfullscreenにしません。URL入力自体のキーはページイベントではなくXTEST経路で送り、CDPによるcommit・Normalizer・UI確定のidentityを全件照合します。録画外の入力、renderer遷移、元URL保持、キャンセル、未知分類、applicationコマンド、Ctrl+L時のpending input確定、消滅したcross-origin iframeでの終了をローカルEdge/Qtと単体試験でも検証します。Windowsのネイティブ入力は引き続き未検証です。
+
+最終全回帰テストは **161 passed in 97.54s**。DOM bindingもnavigationと同じ受信順で取り込み、非同期callbackで先行するclickがopenの後へ回らないことを回帰試験に追加しました。

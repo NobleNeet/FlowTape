@@ -140,6 +140,12 @@ if (!window.__flowtape) {
     }
     if(state.mode!=='record'||state.composing||e.isComposing||e.keyCode===229)return;
     const el=e.composedPath()[0];
+    const addressFocus=!e.shiftKey && (((e.ctrlKey||e.metaKey)&&!e.altKey&&e.key.toLowerCase()==='l') || (e.altKey&&!e.ctrlKey&&!e.metaKey&&e.key.toLowerCase()==='d'));
+    if(addressFocus) {
+      state.flushInput();
+      state.trace('observer_filter',{type:e.type,reason:'browser_address_focus'});
+      return;
+    }
     const multiline=el?.matches?.('textarea')||el?.isContentEditable;
     if(e.key==='Enter'&&!multiline)state.flushInput();
     if((e.key==='Enter'&&!multiline)||['Escape','Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End','PageUp','PageDown'].includes(e.key)||/^F\d{1,2}$/.test(e.key)||e.ctrlKey||e.altKey||e.metaKey) {

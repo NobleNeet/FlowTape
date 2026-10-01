@@ -24,7 +24,7 @@ from native_input import NativeInput
 BASE = 'https://www.uitestingplayground.com'
 CASES = {'click': '/click', 'input': '/textinput', 'checkbox': '/autowait',
          'single_select': '/select', 'multi_select': '/select', 'navigation': '/',
-         'radio': 'https://www.selenium.dev/selenium/web/web-form.html'}
+         'radio': 'https://www.selenium.dev/selenium/web/web-form.html', 'address_open': '/'}
 
 
 def main():
@@ -110,18 +110,27 @@ def main():
         window.open_browser()
         assert window.driver is not None, window.status.text()
         native.activate_edge()
-        native.chord('Control_L', 'l')
-        native.type(starting_url)
-        native.press('Return')
-        wait(lambda: read('location.href') == starting_url, timeout=30)
-        native.press('F11')
+        if args.case != 'address_open':
+            native.chord('Control_L', 'l')
+            native.type(starting_url)
+            native.press('Return')
+            wait(lambda: read('location.href') == starting_url, timeout=30)
+        if args.case != 'address_open':
+            native.press('F11')
         pump(1)
         QTest.mouseClick(window.record_button, Qt.MouseButton.LeftButton)
         assert window.recording
         pump(.2)
         for index in range(args.count):
             before = len(window.scenario['steps'])
-            if args.case == 'click':
+            if args.case == 'address_open':
+                destination = BASE + ('/' if index % 2 == 0 else '/textinput')
+                native.activate_edge()
+                native.chord('Control_L', 'l')
+                native.type(destination)
+                native.press('Return')
+                expected.append({'action': 'open', 'url': destination})
+            elif args.case == 'click':
                 click_control('#badButton')
                 expected.append({'action': 'click', 'target': 'Button That Ignores DOM Click Event'})
             elif args.case == 'input':
@@ -153,7 +162,9 @@ def main():
                 click_control(selector)
                 expected.append({'action': 'click', 'target': 'Text Input' if index % 2 == 0 else 'UITAP'})
             pump(.7)
-            if args.case == 'navigation':
+            if args.case == 'address_open':
+                wait(lambda: read('location.href') == destination and read('document.readyState') == 'complete', timeout=30)
+            elif args.case == 'navigation':
                 destination = BASE + ('/textinput' if index % 2 == 0 else '/')
                 wait(lambda: read('location.href') == destination and read('document.readyState') == 'complete')
             elif args.case == 'input':
@@ -178,7 +189,10 @@ def main():
         assert len(relevant) == len(expected), {'expected': expected, 'actual': relevant}
         for wanted, actual in zip(expected, relevant):
             assert all(actual.get(key) == value for key, value in wanted.items()), (wanted, actual)
+        if args.case == 'navigation':
+            assert not any(node['action'] == 'open' for node in window.scenario['steps']), 'Link navigation recorded twice'
         QTest.mouseClick(window.record_button, Qt.MouseButton.LeftButton)
+        assert not window.recorder_error and not window.pending_operation and not window.operation_queue, window.recorder_error or window.status.text()
         window.actions['保存'].trigger()
         schema.validate_package(schema.load_yaml(source), schema.load_yaml(root / 'elements.yaml'))
         rows = [json.loads(line) for line in (root / 'trace.jsonl').read_text().splitlines()]
@@ -196,7 +210,13 @@ def main():
         assert stages['transport_operation'] <= terminal, {'missing_ui': list(stages['transport_operation'] - terminal)}
         native_rows = [row for row in rows if row['stage'] == 'observer_input' and row.get('mode') == 'record'
                        and row['type'] in {'click', 'input', 'change', 'keydown'}]
-        assert native_rows and all(row['trusted'] for row in native_rows), 'Untrusted input in native acceptance'
+        assert (native_rows or args.case == 'address_open') and all(row['trusted'] for row in native_rows), 'Untrusted input in native acceptance'
+        if args.case == 'address_open':
+            from flowtape.player import Player
+            window.driver.get('about:blank')
+            Player(window.driver, schema.load_yaml(source), schema.load_yaml(root / 'elements.yaml'), window.config).run()
+            assert read('location.href') == expected[-1]['url']
+            report['replayed'] = True
         report.update(passed=True, completed=len(completed), steps=window.scenario['steps'], errors=errors,
                       site=starting_url,
                       native_events=len(native_rows), trusted=True,
@@ -218,6 +238,7 @@ def main():
         window.recording = window.picking = False
         window.pending_operation = window.pending_credential = None
         window.operation_queue.clear()
+        window.recorder_error = None
         window.dirty = False
         window.close()
         app.processEvents()

@@ -701,6 +701,12 @@ Inference of `open`, `back`, `forward`, or `refresh` from external browser UI be
 
 The Recorder must not invent an uncertain navigation action silently.
 
+For Edge, the browser-side CDP transport observes top-level `Page.frameRequestedNavigation`, `Page.frameStartedNavigating`, and `Page.frameNavigated` in WebSocket notification order. A committed `differentDocument` navigation that started during recording without a renderer navigation request is recorded as `open` with the originally requested URL. Server redirects belong to that same operation. No step is added just for starting/resuming recording on an existing page, for a navigation started before recording, or for a cancelled/failed navigation. Renderer-initiated link/form/script transitions do not add an `open` beside their DOM operation. Frame navigations and unknown/history/reload classifications are not inferred as direct URL opens.
+
+These are Python transport-owned navigation observations, not injected DOM RawCaptureEvents. Their independent in-memory `navigation-…` stream identities share the merge/normalization/UI diagnostic path without claiming to be the injected document's instance or sequence. They never enter persisted YAML. A pending DOM click is finalized before a following independent navigation operation.
+
+Address-focus shortcuts (`Ctrl/Meta+L`, `Alt+D`, without Shift) may reach the source document before browser chrome receives focus. They flush pending field input but do not become DOM `key` steps; `observer_filter: browser_address_focus` explains their omission. The subsequent confirmed URL opening is the semantic operation. Application-owned URL opening inserts its explicit `open` once and suppresses duplicate transport navigation capture. Existing queued DOM operations are finalized before that application command navigates.
+
 ## 26. SPA navigation
 
 Injected JavaScript should observe SPA history changes where practical, including:

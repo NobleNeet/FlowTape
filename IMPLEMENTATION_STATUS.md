@@ -150,3 +150,13 @@ Python 依存関係は `.venv` に導入しました。sudo / su / root / OS pac
 結果とtraceは `build/native-recorder/verified-*/`、集約は `build/native-recorder/summary.json` です。**全149テスト成功**。Stage 1の保守的なlocator/identity、destination DOMを参照しないUI確定、未確認条件での保留、診断の値非保存・CDP/poll重複排除・診断binding欠落時のfallbackを回帰テストで確認しました。
 
 Linuxのheaded Edge 154.0.4258.37・既存X11/XTEST/IBusを使用し、IBusのoriginal engineは終了時に復元・確認しました。`python-xlib` は `.venv` に導入（optional native-test extra）。WindowsのOS入力・日本語IME・配布物再ビルドは未検証です。sudo/su/root/OS package installationや禁止されたVM外への書き込みはありません。ソース・テスト・ドキュメントは継続許可に従いcommit/pushし、実行成果物・依存パッケージを除外します。
+
+## 録画中のアドレスバーからのURLを開く操作
+
+旧navigation試験は録画前に開始URLを開いていたため、録画開始後のアドレスバー入力をカバーしていませんでした。旧コミットの隔離worktreeで、OS入力によりサイトが表示されてもopenが0件になる問題を再現しました。
+
+CDPのtop-level navigation開始・renderer要求・commitを受信順で観測し、録画中にブラウザから直接開始された確定済みdifferentDocumentの遷移をopenへ変換しました。Raw DOM bindingも同じ受信経路で取り込み、先行する操作が遅延callback threadに残ってopenの後へ回る競合を防ぎます。元の要求URLを保持し、リンク・フォーム・script・iframe・録画外・失敗/キャンセル・未知分類は直接URL入力と推測しません。Ctrl/Meta+LとAlt+Dはpending入力を確定し、余分なDOM key Stepを残しません。FlowTapeのURLコマンドは前の記録を確定し、明示openの二重記録を抑止します。遷移で消滅したcross-origin frameへの再設定失敗も修正し、捕捉済みイベントは保持しています。
+
+最終native試験は `build/native-recorder/address-ordered-final/` でアドレスバーから10回開いてopen 10件（余分なkey Stepなし）、保存後の先頭再生成功、欠落0・リトライ0。`address-link-ordered-final/` ではリンク往復10回でclick 10件・重複open 0件です。録画終了後のrecorder_error/pending/queueも検査し、終了コード0とIBusの元engine復元を確認しました。[原因と試験範囲](docs/testing/recorder-native-input.md) に証拠を追記しました。
+
+最終回帰テストは **161 passed in 97.54s**。LinuxのEdge 154.0.4258.37、公開Playgroundとlocalhost fixture、Qtを使用しました。Windowsのネイティブ入力・日本語IME・配布物再ビルドは未検証です。権限昇格・OSパッケージ追加・禁止された外部書き込みは行っていません。継続的な許可に従ってソース・テスト・ドキュメントをcommit/pushし、実行成果物は除外します。

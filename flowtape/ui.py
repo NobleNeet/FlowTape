@@ -994,13 +994,19 @@ class FlowTapeWindow(QMainWindow):
             self.browser_status.setText('Browser: unavailable — '+str(exc)+'（ブラウザから再試行／設定から変更）')
         self.update_actions()
 
+    @recorder_boundary
     def open_url(self):
         if not self._browser_available(): return
         self.open_browser()
         if not self.driver: return
         url, ok = QInputDialog.getText(self, "URL", "URL")
         if not ok or not url: return
-        self.driver.get(url)
+        if self.recording:
+            self.operation_queue.extend(self.transport.drain(force=True))
+            self._process_operations()
+            if self.pending_operation or not self.recording: return
+        if isinstance(self.transport, RecorderTransport): self.transport.navigate(url)
+        else: self.driver.get(url)
         if self.scenario is not None: self._insert_node({'action':'open','url':url},recording=True)
 
     @recorder_boundary
@@ -1302,6 +1308,10 @@ class FlowTapeWindow(QMainWindow):
             return False
 
     def _operation(self, op):
+        if op.action == 'open':
+            if self._insert_node({'action': 'open', 'url': op.data['url']}, recording=True):
+                self.recorder_trace.operation('ui_committed', op)
+            return
         if op.action == 'picker_cancel':
             self.picking = False
             self.collection_picking = False

@@ -124,3 +124,4 @@ PYTHONPATH=. .venv/bin/python scripts/smoke_recorder_native.py \
 通常クリック、文字入力、checkbox（labelも含む）、single select、Ctrl+multi select、リンク遷移を各10回連続入力し、値・順序・信頼済み入力と各配送段階を照合します。radioは公式Seleniumサンプルで補足します。入力のリトライやDOM直接操作での補正は行いません。IBusは英字の直接入力へ一時切替し、終了時に元のengineへ戻します。詳細は [実入力試験の監査と結果](docs/testing/recorder-native-input.md) を参照してください。
 
 通常起動でも `FLOWTAPE_RECORDER_TRACE=/absolute/path/trace.jsonl` を指定すると、値を含まないRecorderの段階別診断を有効にできます。診断は通常のシナリオやregistryへ入りません。
+録画中にEdgeのアドレスバーからURLを開くと、遷移の確定後に `open` Stepを記録します。リンククリックによる遷移には重複する `open` を追加しません。既に開いているページで録画を開始するだけでは、遷移を追加しません。上記スクリプトの `--case address_open` は、録画開始後のアドレスバー入力を10回記録し、保存したシナリオを先頭から再生します。

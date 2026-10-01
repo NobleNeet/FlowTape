@@ -98,6 +98,9 @@ class EventNormalizer:
             elif typ == "pick":
                 out.append(self.operation(event, 'pick'))
             elif typ == 'picker_cancel': out.append(self.operation(event, 'picker_cancel'))
+            elif typ == 'navigation':
+                out.extend(self.flush(now, force=True))
+                out.append(self.operation(event, 'open', data=event['data']))
         for op in out:
             self.trace.operation('normalizer_operation', op)
         return out
@@ -352,7 +355,26 @@ class RecorderTransport:
                 self._configure_bridge(bridge)
 
     def _configure_bridge(self, bridge):
-        bridge.configure('(()=>{' + DOM_JS + '\n' + OBSERVER_JS + '\nwindow.__flowtape.traceEnabled=' + str(self.trace.enabled).lower() + ';window.__flowtape.pageConditions=' + json.dumps(self.page_conditions) + ';window.__flowtape.setMode(' + repr(self.mode) + ');})();')
+        bridge.navigation.set_mode(self.mode)
+        try:
+            bridge.configure('(()=>{' + DOM_JS + '\n' + OBSERVER_JS + '\nwindow.__flowtape.traceEnabled=' + str(self.trace.enabled).lower() + ';window.__flowtape.pageConditions=' + json.dumps(self.page_conditions) + ';window.__flowtape.setMode(' + repr(self.mode) + ');})();')
+        except WebDriverException:
+            targets = self.driver.execute_cdp_cmd('Target.getTargets', {})['targetInfos']
+            if bridge.handle is not None or any(target['targetId'] == str(bridge.target_id) for target in targets):
+                raise
+            bridge.connection.detached = True
+            self.trace.write('transport_frame_detached')
+
+    def navigate(self, url):
+        """Application URL command owns its explicit open, avoiding duplicates."""
+        bridges = list(self.bridges.values())
+        for bridge in bridges:
+            bridge.navigation.suppressed = True
+        try:
+            self.driver.get(url)
+        finally:
+            for bridge in bridges:
+                bridge.navigation.suppressed = False
 
     def inject(self, mode: str = "record"):
         self.trace.write('recorder_boundary', mode=mode)
@@ -360,9 +382,9 @@ class RecorderTransport:
         for bridge in self.bridges.values(): self._configure_bridge(bridge)
         self._visit(boundary=True)
 
-    def drain(self):
+    def drain(self, *, force=False):
         result = self._visit(collect=True)
-        return self._operations(result)
+        return self._operations(result, force=force)
 
     def _operations(self, events, force=False):
         causal = [e.get('window_context', {}).get('handle') for e in events if e['type'] in {'click','dblclick','key'} and e.get('window_context',{}).get('handle') in self.windows.alive]
@@ -405,6 +427,7 @@ class RecorderTransport:
         self.mode='observe'
         self._visit(reset=True)
         for bridge in self.bridges.values():
+            bridge.navigation.reset()
             with bridge.lock:
                 bridge.events=[];bridge.overflow=False;bridge.invalid=False
             self._configure_bridge(bridge)

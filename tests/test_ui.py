@@ -167,3 +167,52 @@ def test_cancel_source_registration_retains_click_without_reprompt(tmp_path):
         window.pending_operation = None
         window.recording = window.dirty = False
         window.close()
+
+
+def test_direct_open_records_without_target_registration_and_survives_save(tmp_path):
+    from flowtape.recorder import Operation
+    app = QApplication.instance() or QApplication([])
+    source = tmp_path / 'scenario.yaml'
+    save_yaml(source, {'version': 1, 'name': 'navigation', 'steps': []})
+    save_yaml(tmp_path / 'elements.yaml', {'version': 1, 'pages': {}})
+    window = FlowTapeWindow(str(source), preferences_path=tmp_path / 'preferences.json')
+    try:
+        with patch.object(window, '_page', side_effect=AssertionError('open has no DOM target')):
+            window._operation(Operation('open', data={'url': 'https://www.uitestingplayground.com/'}))
+        assert window.scenario['steps'][0]['action'] == 'open'
+        assert window.scenario['steps'][0]['url'] == 'https://www.uitestingplayground.com/'
+        window.save()
+        assert load_yaml(source)['steps'] == window.scenario['steps']
+        assert window.registry['pages'] == {}
+    finally:
+        window.dirty = False
+        window.close()
+
+
+def test_application_open_flushes_prior_recording_and_owns_single_open(tmp_path):
+    from unittest.mock import Mock
+    from types import SimpleNamespace
+    from flowtape.recorder import Operation, RecorderTransport
+    app = QApplication.instance() or QApplication([])
+    source = tmp_path / 'scenario.yaml'
+    save_yaml(source, {'version': 1, 'name': 'URL command', 'steps': []})
+    save_yaml(tmp_path / 'elements.yaml', {'version': 1, 'pages': {}})
+    window = FlowTapeWindow(str(source), preferences_path=tmp_path / 'preferences.json')
+    window.driver = SimpleNamespace(get=Mock())
+    window.transport = object.__new__(RecorderTransport)
+    window.transport.drain = Mock(return_value=[Operation('key', value='Tab')])
+    window.transport.navigate = Mock()
+    window.transport.set_pages = Mock()
+    window.recording = True
+    try:
+        with patch('flowtape.ui.QInputDialog.getText', return_value=('https://test/', True)):
+            window.open_url()
+        assert [node['action'] for node in window.scenario['steps']] == ['key', 'open']
+        window.transport.drain.assert_called_once_with(force=True)
+        window.transport.navigate.assert_called_once_with('https://test/')
+        window.driver.get.assert_not_called()
+    finally:
+        window.driver = window.transport = None
+        window.recording = window.dirty = False
+        window.recorder_error = None
+        window.close()

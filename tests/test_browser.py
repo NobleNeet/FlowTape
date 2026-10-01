@@ -150,6 +150,79 @@ def test_recorder_frame_and_navigation_reinjection(browser):
     transport.close()
 
 
+def test_direct_navigation_open_boundaries_and_link_deduplication(browser):
+    driver, _, url = browser
+    driver.get('about:blank')
+    transport = RecorderTransport(driver)
+    try:
+        transport.inject('observe')
+        driver.get(url)
+        assert transport.drain() == []
+        transport.inject('record')
+        # Entering recording alone does not invent an initial open.
+        assert transport.drain() == []
+        driver.get(url.replace('index.html', 'next.html'))
+        opened, = transport.drain()
+        assert opened.action == 'open' and opened.data['url'].endswith('/next.html')
+        driver.get(url)
+        opened, = transport.drain()
+        assert opened.action == 'open' and opened.data['url'] == url
+        driver.find_element('id', 'next').click()
+        ops = transport.drain(force=True)
+        assert [op.action for op in ops] == ['click']
+        transport.navigate(url)
+        assert transport.drain() == []  # The GUI command inserts its own open.
+        driver.execute_script("location.href='/next.html'")
+        from selenium.webdriver.support.ui import WebDriverWait
+        WebDriverWait(driver, 10).until(lambda d: d.current_url.endswith('/next.html'))
+        assert transport.drain() == []  # Script navigation is not a direct URL entry.
+        transport.stop()
+        driver.get(url)
+        transport.inject('record')
+        assert transport.drain() == []
+    finally:
+        transport.close()
+
+
+def test_address_focus_keys_flush_input_without_persisting_browser_shortcuts(browser):
+    driver, _, url = browser
+    driver.get(url)
+    transport = RecorderTransport(driver)
+    try:
+        transport.inject('record')
+        driver.execute_script("""
+            const field=document.querySelector('#field');field.value='pending';
+            field.dispatchEvent(new Event('input',{bubbles:true}));
+            field.dispatchEvent(new KeyboardEvent('keydown',{key:'l',ctrlKey:true,bubbles:true}));
+            field.dispatchEvent(new KeyboardEvent('keydown',{key:'d',altKey:true,bubbles:true}));
+            field.dispatchEvent(new KeyboardEvent('keydown',{key:'a',ctrlKey:true,bubbles:true}));
+        """)
+        operations = transport.stop()
+        assert [(op.action, op.value) for op in operations] == [('input', 'pending'), ('key', 'a')]
+    finally:
+        transport.close()
+
+
+def test_destroyed_cross_origin_frame_can_stop_without_losing_captured_click(browser):
+    driver, _, url = browser
+    driver.get(url)
+    source = url.replace('127.0.0.1', 'localhost')
+    driver.execute_script("document.querySelector('#inside').removeAttribute('srcdoc');document.querySelector('#inside').src=arguments[0]", source)
+    transport = RecorderTransport(driver)
+    try:
+        transport.inject('record')
+        assert any(bridge.handle is None for bridge in transport.bridges.values())
+        driver.switch_to.frame(driver.find_element('id', 'inside'))
+        driver.find_element('id', 'save').click()
+        driver.switch_to.default_content()
+        driver.execute_script("document.querySelector('#inside').remove()")
+        operations = transport.stop()
+        assert any(op.action == 'click' and op.url == source and op.context == [{'frame': {'id': 'inside'}}] for op in operations)
+        assert not any(op.action == 'open' for op in operations)
+    finally:
+        transport.close()
+
+
 def test_capture_generation_verifies_identity_and_relative_context(browser):
     driver, _, url = browser
     driver.get(url)
