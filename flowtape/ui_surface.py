@@ -189,7 +189,10 @@ def update_surface(w):
     pending=bool(w.pending_operation or w.operation_queue or w.recorder_error)
     for label,action in w.actions.items():
         enabled=active if label in w.scenario_actions or label in {'シナリオを閉じる','保存'} else True
-        if label in w.browser_actions:enabled=enabled and ready
+        if label in w.browser_actions:
+            launch_command=label in {'記録開始','選択後に記録','URLを開く'}
+            enabled=enabled and (playable if launch_command else ready)
+            if launch_command and not ready and pending:enabled=False
         if w.recording and label in w.scenario_actions and label not in {'記録停止','記録保留を破棄','認証情報の選択を再試行'}:enabled=False
         action.setEnabled(enabled)
     w.scenario_heading.setVisible(active)
@@ -197,7 +200,7 @@ def update_surface(w):
     w.primary_bar.setVisible(active)
     w.record_button.setVisible(not busy)
     w.record_button.setText('■ 記録を終了' if w.recording else '● 記録')
-    w.record_button.setEnabled(active and ready and (w.recording or not pending))
+    w.record_button.setEnabled(active and playable and (w.recording or not pending))
     playback_visible=active and not w.recording
     w.play_button.setVisible(playback_visible)
     text={'running':'⏸ 一時停止','paused':'▶ 再開','failed':'↻ 再試行'}.get(state,'▶ 再生')
@@ -218,8 +221,8 @@ def update_surface(w):
     w.new_recording_button.setStyleSheet('font-size:18px;padding:12px;background:#1d4ed8;color:white;border-radius:4px' if ready else '')
     empty=active and not w.scenario['steps']
     w.empty_view.setVisible(empty and not w.recording)
-    w.empty_record_button.setEnabled(ready and not busy and not pending)
-    w.empty_url_button.setEnabled(ready and not busy and not pending)
+    w.empty_record_button.setEnabled(playable and not busy and not pending)
+    w.empty_url_button.setEnabled(playable and not busy and not pending)
     w.editor_splitter.setVisible(active and not empty)
     w.next_view.setVisible(active and w.just_recorded and not w.recording and not busy and not pending)
     if active:w.next_hint.setText(f'{w.last_recorded_count}個の操作を記録しました。再生して動作を確認できます。')
@@ -240,7 +243,7 @@ def update_surface(w):
         message={'paused':'⏸ 一時停止中','failed':'再生に失敗しました — 選択した操作を確認してください。'}.get(state,'▶ 末尾まで再生中 → 完了後に録画を開始します。' if w.record_after_play else '▶ 再生中')
     elif w.pending_credential:message='認証情報の選択待ち — ⋯ から認証情報の選択を再試行できます。'
     elif pending:message='未確定の記録があります — ⋯ から確定または破棄してください。'
-    elif not ready and active and playable:message='再生するとEdgeを起動して、先頭から実行します。'
+    elif not ready and active and playable:message='記録または再生を始めるとEdgeを起動します。'
     elif not ready:message='ブラウザのセットアップまたは再試行で、Edgeに接続してください。'
     elif not active:message='新しい操作を記録するか、既存シナリオを開いてください。'
     else:message='準備完了'

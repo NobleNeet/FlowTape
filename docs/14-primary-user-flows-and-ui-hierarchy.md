@@ -287,6 +287,8 @@ Edgeを普段どおり操作してください。
 
 Secondary structural-authoring commands should not dominate an empty scenario.
 
+With valid browser configuration, `記録を開始` remains available when Edge has been closed. Pressing it starts Edge and then enables recording, including after completing a previous scenario and creating a new empty package. The optional Open URL command can also start Edge. Package creation alone does not start recording or add an `open`; record an actual URL-opening operation to make a self-starting scenario. Unresolved capture must be resolved before launching, and startup failure leaves the empty scenario ready for retry.
+
 ### 4.7 Recording
 
 After recording begins, the primary recording command changes to `■ 記録を終了`.

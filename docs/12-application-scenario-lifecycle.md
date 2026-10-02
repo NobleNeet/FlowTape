@@ -73,7 +73,7 @@ Microsoft Edge could not be started.
 
 Recorder, Picker, Rebind, DOM diagnostics, and Player require a usable controlled browser.
 
-When a scenario and valid browser configuration are loaded, an idle fresh-playback request may start the controlled browser before creating the Player. Its normal Play/Continue-recording commands remain available after the old browser has closed. They must not require a separate browser-retry click merely to execute a self-starting scenario. Capture uncertainty still blocks playback until resolved. Missing/invalid configuration retains the setup/retry workflow.
+When a scenario and valid browser configuration are loaded, an idle recording, URL-opening, or fresh-playback request may start the controlled browser before using the Recorder or Player. Record (including the empty-scenario command), Open URL, Play, and Continue-recording remain available after the old browser has closed. They must not require a separate browser-retry click. Check the existing session at this command boundary, since browser closure may not yet have been detected by polling; release a stale session before starting Edge. Unresolved capture blocks this launch until resolved. Missing/invalid configuration retains the setup/retry workflow. Startup failure leaves recording stopped and the command available for retry. Creating an empty package alone neither starts recording nor synthesizes a browser action.
 
 The application window itself does not.
 

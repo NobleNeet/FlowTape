@@ -170,3 +170,11 @@ CDPのtop-level navigation開始・renderer要求・commitを受信順で観測�
 `scripts/smoke_playback_recovery.py` は実Qt再生ボタン・PlaybackWorker・Playerを使用します。既存about:blank、元tabを閉じて新しいblankだけを残す場合、ブラウザ終了のpoll検出前/後の4状態で、すべて9/9 Step完了・最後のselect値/集合一致・元scenario/elementsとコピーのバイト一致を確認しました。結果は `build/playback-recovery/summary.json` と各report、[再現・修正・試験範囲](docs/testing/playback-recovery.md) にあります。
 
 最終全回帰テストは **168 passed in 80.00s**。Linux Edge 154.0.4258.37、公開Playgroundとlocalhost fixture、Qtで検証しました。Windows実機・配布物再ビルドは未検証です。権限昇格・OS package追加・禁止された外部書き込みはありません。ソース・テスト・ドキュメントを継続許可に従ってcommit/pushし、ユーザーのscenario、試験profile、preferences、ログ等の実行時データは含めません。
+
+## Edge終了後の新規シナリオで記録開始
+
+記録開始のdriver必須guardと、起動中のbrowserを前提にしたボタン有効条件を修正しました。設定済みなら主記録ボタン・空シナリオの記録開始・URLを開く操作からEdgeを起動できます。sessionの生存確認を共通の起動処理へ移し、poll検知前の終了にも対応します。未確定記録の起動拒否、起動失敗時の録画停止・再試行、新規作成だけでは録画やopenを追加しない境界を維持しています。
+
+実Qt/Edge試験で、元シナリオのコピーを9 Step再生→Edge終了→新規シナリオ作成→記録開始→アドレスバーへのX11 XTEST入力でopen 1件を記録→保存→1 Step再生完了を、終了のpoll検知前/後で確認しました。証拠は `build/playback-recovery/new-record-before-poll/` と `new-record-polled/`、試験手順は [playback-recovery.md](docs/testing/playback-recovery.md) にあります。元scenario/elementsは変更せずバイト一致を確認し、IBusも元engineへ復元しました。Linux Edgeで検証し、Windows実機・配布物は未検証です。実行成果物はGitへ含めません。
+
+全回帰テストは **174 passed in 120.53s**。権限昇格・OSパッケージ追加・禁止された外部書き込みはありません。継続許可に従いソース・テスト・ドキュメントをcommit/pushします。

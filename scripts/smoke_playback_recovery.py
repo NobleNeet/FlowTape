@@ -1,4 +1,4 @@
-"""Replay an unchanged scenario copy through the GUI after tab/browser closure."""
+"""Verify GUI playback and new recording after tab/browser closure."""
 
 import argparse
 import hashlib
@@ -18,7 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scenario', required=True)
     parser.add_argument('--driver', required=True)
-    parser.add_argument('--case', required=True, choices=['blank', 'replacement_blank', 'closed', 'closed_polled'])
+    parser.add_argument('--case', required=True, choices=['blank', 'replacement_blank', 'closed', 'closed_polled', 'new_record', 'new_record_polled'])
     parser.add_argument('--artifacts', required=True)
     args = parser.parse_args()
     original = Path(args.scenario).expanduser().resolve()
@@ -39,11 +39,53 @@ def main():
     window = FlowTapeWindow(str(source), str(config), preferences_path=root / 'preferences.json')
     window.show()
     report = {'case': args.case, 'source_sha256': hashlib.sha256(source_bytes).hexdigest(), 'passed': False}
+    native = None
+    def finish_playback():
+        assert window.worker is not None, window.status.text()
+        deadline = monotonic() + 60
+        while window.worker.isRunning() and monotonic() < deadline:
+            app.processEvents()
+            sleep(.01)
+        app.processEvents()
+        assert not window.worker.isRunning(), 'Playback did not finish'
+        assert window.controller.state == 'complete', str(window.controller.error) or window.status.text()
     try:
         window.open_browser()
         assert window.driver is not None, window.status.text()
         driver = window.driver
-        if args.case == 'blank':
+        if args.case in {'new_record', 'new_record_polled'}:
+            QTest.mouseClick(window.play_button, Qt.MouseButton.LeftButton)
+            finish_playback()
+            report['previous_executed_steps'] = len(window.controller.executed_ids)
+            url = next(node['url'] for node in window.scenario['steps'] if node.get('action') == 'open')
+            driver.quit()
+            if args.case == 'new_record_polled':
+                window.last_browser_check = 0
+                window.poll()
+            assert window.create_scenario('New recording', root / 'new-recording')
+            assert window.scenario['steps'] == [] and not window.recording
+            report['record_enabled'] = window.empty_record_button.isEnabled()
+            assert report['record_enabled'], 'Record disabled after creating empty scenario'
+            QTest.mouseClick(window.empty_record_button, Qt.MouseButton.LeftButton)
+            assert window.recording and window.driver is not None, window.status.text()
+            assert window.transport.mode == 'record' and not window.scenario['steps']
+            from native_input import NativeInput
+            native = NativeInput()
+            native.activate_edge()
+            native.chord('Control_L', 'l')
+            native.type(url)
+            native.press('Return')
+            deadline = monotonic() + 30
+            while not window.scenario['steps'] and monotonic() < deadline:
+                app.processEvents()
+                sleep(.01)
+            assert window.recording and not window.recorder_error and not window.pending_operation, window.status.text()
+            assert [(step['action'], step.get('url')) for step in window.scenario['steps']] == [('open', url)]
+            QTest.mouseClick(window.record_button, Qt.MouseButton.LeftButton)
+            assert not window.recorder_error and not window.pending_operation and not window.operation_queue
+            assert window.save()
+            report.update(recorded_steps=1, recording_input='X11 XTEST', recording_saved=True)
+        elif args.case == 'blank':
             driver.get('about:blank')
         elif args.case == 'replacement_blank':
             old = driver.current_window_handle
@@ -58,14 +100,7 @@ def main():
         report['play_enabled'] = window.play_button.isEnabled()
         assert report['play_enabled'], 'Playback disabled after browser closure'
         QTest.mouseClick(window.play_button, Qt.MouseButton.LeftButton)
-        assert window.worker is not None, window.status.text()
-        deadline = monotonic() + 60
-        while window.worker.isRunning() and monotonic() < deadline:
-            app.processEvents()
-            sleep(.01)
-        app.processEvents()
-        assert not window.worker.isRunning(), 'Playback did not finish'
-        assert window.controller.state == 'complete', str(window.controller.error) or window.status.text()
+        finish_playback()
         report['executed_steps'] = len(window.controller.executed_ids)
         assert report['executed_steps'] == len(window.scenario['steps'])
         report['browser_url'] = window.driver.current_url
@@ -99,6 +134,7 @@ def main():
         window.operation_queue.clear()
         window.close()
         app.processEvents()
+        if native is not None: native.close()
 
 
 if __name__ == '__main__': main()

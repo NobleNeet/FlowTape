@@ -973,7 +973,12 @@ class FlowTapeWindow(QMainWindow):
 
     def open_browser(self):
         if not self._browser_available(): return
-        if self.driver: return
+        if self.driver:
+            try:
+                if self.driver.window_handles: return
+            except Exception:
+                pass
+            self.shutdown_browser()
         if self.config is None:
             self.browser_status.setText('Browser: unavailable — セットアップからEdgeに接続してください')
             return
@@ -1011,11 +1016,11 @@ class FlowTapeWindow(QMainWindow):
 
     @recorder_boundary
     def start_record(self):
-        if self.scenario is None or self.driver is None: return
+        if self.scenario is None: return
         if not self._browser_available(): return
         if self.recorder_error:
             if QMessageBox.question(self,'記録の同期回復','不確かな区間の未確定イベントを破棄し、新しい記録境界から開始しますか？') != QMessageBox.StandardButton.Yes: return
-            self.transport.reset()
+            if self.transport is not None: self.transport.reset()
             self.pending_operation=None
             self.pending_credential=None
             self.operation_queue.clear()
@@ -1521,12 +1526,6 @@ class FlowTapeWindow(QMainWindow):
             self.status.setText('保留中の記録を確定または破棄してから再生してください')
             return False
         self.picking = False
-        if self.driver is not None:
-            try:
-                if not self.driver.window_handles:
-                    raise RuntimeError('controlled browser has no surviving windows')
-            except Exception:
-                self.shutdown_browser()
         self.open_browser()
         if not self.driver:
             return False

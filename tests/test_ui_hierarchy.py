@@ -328,3 +328,55 @@ def test_unresolved_capture_blocks_browser_relaunch_for_playback(window,tmp_path
     with patch('flowtape.ui.open_edge') as launch:
         assert not window._new_playback()
     launch.assert_not_called()
+
+
+@pytest.mark.parametrize('closed_detected', [True, False])
+@pytest.mark.parametrize('button', ['record_button', 'empty_record_button'])
+def test_new_empty_recording_starts_edge_after_previous_playback(window,tmp_path,closed_detected,button):
+    from flowtape.recorder import RecorderTransport
+    ready(window,tmp_path,[{'action':'open','url':'http://local/start'}])
+    assert window.save()
+    window.play();finish(window)
+    assert window.controller.state == 'complete'
+    old = window.driver
+    old.window_handles = []
+    if closed_detected:
+        window.last_browser_check = 0
+        window.poll()
+    assert window.create_scenario('Next recording', tmp_path/'next')
+    assert window.scenario['steps'] == [] and not window.recording
+    assert window.record_button.isEnabled() and window.empty_record_button.isEnabled()
+    assert window.actions['記録開始'].isEnabled() and window.empty_url_button.isEnabled()
+    fresh = Mock()
+    fresh.window_handles = ['fresh']
+    fresh.current_window_handle = 'fresh'
+    with patch('flowtape.ui.open_edge', return_value=fresh) as launch, patch.object(RecorderTransport, 'inject') as inject:
+        QTest.mouseClick(getattr(window, button), Qt.MouseButton.LeftButton)
+    launch.assert_called_once()
+    old.quit.assert_called_once()
+    assert window.recording and window.driver is fresh and window.scenario['steps'] == []
+    assert [call.args[0] for call in inject.call_args_list] == ['observe', 'record']
+
+
+def test_record_startup_failure_stays_idle_and_available_for_retry(window,tmp_path):
+    ready(window,tmp_path)
+    window.shutdown_browser()
+    with patch('flowtape.ui.open_edge', side_effect=RuntimeError('driver unavailable')):
+        QTest.mouseClick(window.empty_record_button, Qt.MouseButton.LeftButton)
+    assert not window.recording and window.driver is None and not window.recorder_error
+    assert window.empty_record_button.isEnabled()
+    assert 'Edge 起動失敗' in window.status.text()
+
+
+def test_pending_capture_disables_record_launch_and_preserves_evidence(window,tmp_path):
+    ready(window,tmp_path)
+    window.shutdown_browser()
+    pending = object()
+    window.pending_operation = pending
+    window.update_actions()
+    assert not window.record_button.isEnabled() and not window.empty_record_button.isEnabled()
+    assert not window.actions['記録開始'].isEnabled()
+    with patch('flowtape.ui.open_edge') as launch:
+        window.start_record()
+    launch.assert_not_called()
+    assert window.pending_operation is pending and not window.recording

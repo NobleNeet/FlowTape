@@ -36,6 +36,21 @@ caseは `blank`（既存タブをabout:blankへ）、`replacement_blank`（古�
 
 検証サイトはUI Testing Playgroundとlocalhost fixture、ブラウザはLinux Edgeです。Windows実機・配布物は未検証です。OSパッケージ追加や権限昇格、禁止された外部書き込みは行いません。
 
+## 再生後にEdgeを閉じて新規録画する流れ
+
+再生の復旧後も、記録開始のボタンと開始guardが起動中のdriverを必須としていたため、新規の空シナリオからEdgeを起動できませんでした。設定済みなら記録開始とURLを開く操作も起動可能にし、既存sessionの生存確認を共通のブラウザ開始処理へ移しました。終了をpollで検知する前でも、古いsessionを解放して起動します。未確定記録は起動を阻止し、起動失敗時は録画停止・再試行可能な状態を保ちます。新規作成だけでは録画やopen追加をしません。
+
+追加case `new_record` / `new_record_polled` は、ユーザーのシナリオのコピーを9 Step再生→Edge終了→新規の空シナリオ作成→実Qtの記録開始→新しいEdgeのアドレスバーへX11 XTESTでURL入力→open 1件を記録→停止・保存→実Qt再生、まで検証します。Recorderへの入力はOS入力で、再生はPlayerが行います。元scenario/elementsを変更せず、設定・profile・新規パッケージも試験用ディレクトリに保存します。
+
+| Edge終了の検知 | 前の再生 | 新規録画・保存・再生 | 証拠（Gitには含めない） |
+|---|---:|---|---|
+| poll検知前 | 9 / 9 | 自動起動・open 1件・1 / 1完了 | `build/playback-recovery/new-record-before-poll/report.json` |
+| poll検知後 | 9 / 9 | 自動起動・open 1件・1 / 1完了 | `build/playback-recovery/new-record-polled/report.json` |
+
+両caseの終了コードは0、元ファイルのSHA256・バイト一致を確認しました。IBusの元engineは終了時に復元します。Qt回帰テストは主記録ボタン/空画面の記録ボタンそれぞれで終了検知前/後を検証し、起動失敗・未確定記録での起動拒否も確認します。
+
+今回の全回帰テストは **174 passed in 120.53s**。
+
 ## 最終結果
 
 ユーザーの9 Stepシナリオのコピーを実Qt再生ボタンから実行し、全Stepの完了と最後のselect操作の値/選択集合を照合しました。元のscenario/elementsとコピーの内容はバイト一致で保持しています。
