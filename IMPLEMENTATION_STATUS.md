@@ -160,3 +160,13 @@ CDPのtop-level navigation開始・renderer要求・commitを受信順で観測�
 最終native試験は `build/native-recorder/address-ordered-final/` でアドレスバーから10回開いてopen 10件（余分なkey Stepなし）、保存後の先頭再生成功、欠落0・リトライ0。`address-link-ordered-final/` ではリンク往復10回でclick 10件・重複open 0件です。録画終了後のrecorder_error/pending/queueも検査し、終了コード0とIBusの元engine復元を確認しました。[原因と試験範囲](docs/testing/recorder-native-input.md) に証拠を追記しました。
 
 最終回帰テストは **161 passed in 97.54s**。LinuxのEdge 154.0.4258.37、公開Playgroundとlocalhost fixture、Qtを使用しました。Windowsのネイティブ入力・日本語IME・配布物再ビルドは未検証です。権限昇格・OSパッケージ追加・禁止された外部書き込みは行っていません。継続的な許可に従ってソース・テスト・ドキュメントをcommit/pushし、実行成果物は除外します。
+
+## タブ・ブラウザ終了後の先頭再生
+
+ユーザーが作成した先頭open付きの9 Stepシナリオを、元ファイルを編集せず試験用コピーで検証しました。旧dcbb48cでは、blankタブだけを残して元ハンドルを閉じた際にRecorderの古いwindow trackingがobserver再設定を阻止し、ブラウザ終了検出後はPlayボタンとdriver必須の開始guardで起動できないことを再現しました。
+
+新規再生の境界で有効なcurrent handleまたは一意な生存タブを初期状態とし、閉じたtop-level transportを除いてRecorder境界を揃えます。scenario/configがあるidle状態では再生/続きを記録を使用でき、終了した古いsessionを解放して設定済みEdgeを起動します。起動時に続きを記録する意図を消さないようにしました。複数tabの曖昧性、runtimeの未知親への復帰、未確定captureは引き続き拒否します。状態依存のシナリオにopenを追加しません。
+
+`scripts/smoke_playback_recovery.py` は実Qt再生ボタン・PlaybackWorker・Playerを使用します。既存about:blank、元tabを閉じて新しいblankだけを残す場合、ブラウザ終了のpoll検出前/後の4状態で、すべて9/9 Step完了・最後のselect値/集合一致・元scenario/elementsとコピーのバイト一致を確認しました。結果は `build/playback-recovery/summary.json` と各report、[再現・修正・試験範囲](docs/testing/playback-recovery.md) にあります。
+
+最終全回帰テストは **168 passed in 80.00s**。Linux Edge 154.0.4258.37、公開Playgroundとlocalhost fixture、Qtで検証しました。Windows実機・配布物再ビルドは未検証です。権限昇格・OS package追加・禁止された外部書き込みはありません。ソース・テスト・ドキュメントを継続許可に従ってcommit/pushし、ユーザーのscenario、試験profile、preferences、ログ等の実行時データは含めません。

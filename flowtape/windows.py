@@ -11,6 +11,11 @@ class WindowContext:
             self.active = driver.current_window_handle
         except Exception:
             self.active = None
+        if self.alive and self.active not in self.alive:
+            if len(self.alive) != 1:
+                raise BrowserContextError('fresh browser context has no unique current window')
+            self.active, = self.alive
+            self.driver.switch_to.window(self.active)
         self.order = [self.active] if self.active else []
         self.parents = {}
 

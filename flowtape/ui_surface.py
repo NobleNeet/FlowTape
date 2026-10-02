@@ -185,6 +185,7 @@ def update_surface(w):
     state=w.controller.state if w.controller else 'idle'
     running=bool(w.worker and getattr(w.worker,'isRunning',lambda:False)())
     busy=running or state in {'running','paused','failed'}
+    playable=ready or (w.config is not None and not busy)
     pending=bool(w.pending_operation or w.operation_queue or w.recorder_error)
     for label,action in w.actions.items():
         enabled=active if label in w.scenario_actions or label in {'シナリオを閉じる','保存'} else True
@@ -201,15 +202,15 @@ def update_surface(w):
     w.play_button.setVisible(playback_visible)
     text={'running':'⏸ 一時停止','paused':'▶ 再開','failed':'↻ 再試行'}.get(state,'▶ 再生')
     if running and state not in {'paused','failed'}:text='⏸ 一時停止'
-    w.play_button.setText(text);w.play_button.setEnabled(active and ready and not pending and bool(w.scenario['steps'] if active else []))
+    w.play_button.setText(text);w.play_button.setEnabled(active and playable and not pending and bool(w.scenario['steps'] if active else []))
     w.play_button.setPopupMode(QToolButton.ToolButtonPopupMode.DelayedPopup if busy else QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-    for action in w.play_menu.actions():action.setEnabled(active and ready and not w.recording and state!='failed')
+    for action in w.play_menu.actions():action.setEnabled(active and playable and not w.recording and state!='failed')
     w.stop_button.setVisible(playback_visible and busy);w.stop_button.setEnabled(active and ready)
     w.skip_button.setVisible(playback_visible and state=='failed');w.skip_button.setEnabled(active and ready)
     w.continue_button.setVisible(not w.recording and not busy)
-    w.continue_button.setEnabled(active and ready and not pending and bool(w.scenario['steps'] if active else []))
+    w.continue_button.setEnabled(active and playable and not pending and bool(w.scenario['steps'] if active else []))
     w.mode_box.setEnabled(active and not busy)
-    w.pace_box.setEnabled(active and ready and not busy)
+    w.pace_box.setEnabled(active and playable and not busy)
     w.start_view.setVisible(not active)
     w.start_heading.setText(('Edgeとの接続を確認してください' if w.config else 'ブラウザを使えるように設定します') if not ready else '何をしますか？')
     w.setup_button.setVisible(not ready);w.existing_config_button.setVisible(not ready);w.setup_hint.setVisible(not ready)
@@ -222,7 +223,7 @@ def update_surface(w):
     w.editor_splitter.setVisible(active and not empty)
     w.next_view.setVisible(active and w.just_recorded and not w.recording and not busy and not pending)
     if active:w.next_hint.setText(f'{w.last_recorded_count}個の操作を記録しました。再生して動作を確認できます。')
-    w.verify_button.setEnabled(ready)
+    w.verify_button.setEnabled(playable and not pending)
     w.recovery_view.setVisible(not ready and (active or w.config is not None))
     w.more_button.setVisible(not w.recording)
     w.insert_first_button.setVisible(not w.recording and not running)
@@ -239,6 +240,7 @@ def update_surface(w):
         message={'paused':'⏸ 一時停止中','failed':'再生に失敗しました — 選択した操作を確認してください。'}.get(state,'▶ 末尾まで再生中 → 完了後に録画を開始します。' if w.record_after_play else '▶ 再生中')
     elif w.pending_credential:message='認証情報の選択待ち — ⋯ から認証情報の選択を再試行できます。'
     elif pending:message='未確定の記録があります — ⋯ から確定または破棄してください。'
+    elif not ready and active and playable:message='再生するとEdgeを起動して、先頭から実行します。'
     elif not ready:message='ブラウザのセットアップまたは再試行で、Edgeに接続してください。'
     elif not active:message='新しい操作を記録するか、既存シナリオを開いてください。'
     else:message='準備完了'

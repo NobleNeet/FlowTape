@@ -73,6 +73,8 @@ Microsoft Edge could not be started.
 
 Recorder, Picker, Rebind, DOM diagnostics, and Player require a usable controlled browser.
 
+When a scenario and valid browser configuration are loaded, an idle fresh-playback request may start the controlled browser before creating the Player. Its normal Play/Continue-recording commands remain available after the old browser has closed. They must not require a separate browser-retry click merely to execute a self-starting scenario. Capture uncertainty still blocks playback until resolved. Missing/invalid configuration retains the setup/retry workflow.
+
 The application window itself does not.
 
 ## 4. No Scenario state
@@ -280,6 +282,8 @@ A newly opened scenario does not inherit semantic execution progress from the pr
 This is intentional because FlowTape supports state-dependent scenarios that may begin from the current browser state.
 
 The user can always execute a self-starting scenario whose first actions establish its own URL/state.
+
+At a fresh playback boundary, retain a valid current WebDriver window. If that handle has been closed and exactly one controlled tab survives, select that unique tab and establish fresh Recorder/Player window tracking before any preload or step command. Remove transports for closed top-level targets. Multiple surviving tabs without a valid current handle remain an explicit ambiguity. If the browser session is already gone, close its stale application resources and start a new browser using the loaded configuration. This is a new run boundary, not automatic browser restart or window guessing during an active/paused/failed run.
 
 ## 13. Application-level configuration
 

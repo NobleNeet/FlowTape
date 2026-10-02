@@ -125,3 +125,5 @@ PYTHONPATH=. .venv/bin/python scripts/smoke_recorder_native.py \
 
 通常起動でも `FLOWTAPE_RECORDER_TRACE=/absolute/path/trace.jsonl` を指定すると、値を含まないRecorderの段階別診断を有効にできます。診断は通常のシナリオやregistryへ入りません。
 録画中にEdgeのアドレスバーからURLを開くと、遷移の確定後に `open` Stepを記録します。リンククリックによる遷移には重複する `open` を追加しません。既に開いているページで録画を開始するだけでは、遷移を追加しません。上記スクリプトの `--case address_open` は、録画開始後のアドレスバー入力を10回記録し、保存したシナリオを先頭から再生します。
+
+先頭に `open` を持つシナリオは、ブランクタブだけの状態やEdge終了後も通常の再生ボタンから開始できます。設定済みのEdgeが必要なら起動し、元のタブが閉じている場合は一つだけ残ったタブを使用します。複数タブの選択が曖昧な場合や未確定の記録は解消が必要です。[タブ・ブラウザ終了後の再生試験](docs/testing/playback-recovery.md) を参照してください。

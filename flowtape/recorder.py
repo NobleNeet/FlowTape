@@ -376,6 +376,18 @@ class RecorderTransport:
             for bridge in bridges:
                 bridge.navigation.suppressed = False
 
+    def prepare_playback(self):
+        """Establish the fresh run's window boundary after capture is finalized."""
+        self.windows = WindowContext(self.driver)
+        for identity, bridge in list(self.bridges.items()):
+            if bridge.handle is not None and bridge.handle not in self.windows.alive:
+                # The controlled handle list proves this old top-level target
+                # is gone. It must not receive preload configuration commands.
+                bridge.connection.detached = True
+                bridge.close()
+                del self.bridges[identity]
+        self.inject('observe')
+
     def inject(self, mode: str = "record"):
         self.trace.write('recorder_boundary', mode=mode)
         self.mode = mode

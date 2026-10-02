@@ -223,6 +223,30 @@ def test_destroyed_cross_origin_frame_can_stop_without_losing_captured_click(bro
         transport.close()
 
 
+def test_fresh_playback_uses_only_blank_surviving_tab_and_replaces_recorder_boundary(browser):
+    driver, cfg, url = browser
+    driver.get(url)
+    transport = RecorderTransport(driver)
+    try:
+        transport.inject('observe')
+        old = driver.current_window_handle
+        driver.switch_to.new_window('tab')
+        blank = driver.current_window_handle
+        driver.get('about:blank')
+        driver.switch_to.window(old)
+        driver.close()
+        transport.prepare_playback()
+        assert driver.current_window_handle == transport.windows.active == blank
+        assert old not in transport.bridges and blank in transport.bridges
+        document = scenario({'version': 1, 'name': 'fresh blank start', 'steps': [
+            {'action': 'open', 'url': url}, {'action': 'click', 'target': '保存'}]})
+        result = Player(driver, document, registry(url), cfg).run()
+        assert result.state == 'complete'
+        assert driver.execute_script('return document.body.dataset.clicked') == 'yes'
+    finally:
+        transport.close()
+
+
 def test_capture_generation_verifies_identity_and_relative_context(browser):
     driver, _, url = browser
     driver.get(url)

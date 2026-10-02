@@ -616,6 +616,8 @@ Using `within: ${row}` on an unrelated detail page is an error.
 
 ## 19. Window semantics
 
+Fresh runtime initialization retains a valid current window or selects the sole surviving window when the old current handle is invalid. It rejects unresolved multiple windows. A no-window context may be constructed for model-only inspection, but actual execution requires a surviving window and fails at restoration if none exists. This initial binding creates no parent relation or persisted switch operation. Runtime restoration and `close_window` continue to require the known surviving parent described below.
+
 ### 19.1 Window creation order
 
 FlowTape tracks its own observed window creation order.

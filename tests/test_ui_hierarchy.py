@@ -295,3 +295,36 @@ def test_pending_recording_keeps_its_original_insertion_position(window,tmp_path
     window.record_at(-1)
     assert window.record_position==(('root',),1) and not window.recording
     menu.deleteLater()
+
+
+@pytest.mark.parametrize('case', ['closed_polled', 'closed_before_poll', 'continue_closed'])
+def test_fresh_playback_starts_browser_from_config_after_closure(window,tmp_path,case):
+    from flowtape.recorder import RecorderTransport
+    ready(window,tmp_path,[{'action':'open','url':'http://local/start'}])
+    old = window.driver
+    if case == 'closed_before_poll': old.window_handles = []
+    else: window.shutdown_browser()
+    window.update_actions()
+    assert window.play_button.isEnabled() and window.continue_button.isEnabled()
+    fresh = Mock()
+    fresh.window_handles = ['fresh']
+    fresh.current_window_handle = 'fresh'
+    with patch('flowtape.ui.open_edge', return_value=fresh) as launch, patch.object(RecorderTransport, 'inject'):
+        QTest.mouseClick(window.continue_button if case == 'continue_closed' else window.play_button, Qt.MouseButton.LeftButton)
+        finish(window)
+    launch.assert_called_once()
+    fresh.get.assert_called_once_with('http://local/start')
+    old.quit.assert_called_once()
+    assert window.controller.state == 'complete' and window.driver is fresh
+    assert window.recording == (case == 'continue_closed')
+
+
+def test_unresolved_capture_blocks_browser_relaunch_for_playback(window,tmp_path):
+    ready(window,tmp_path,[{'action':'open','url':'http://local/start'}])
+    window.shutdown_browser()
+    window.recorder_error = 'capture interval uncertain'
+    window.update_actions()
+    assert not window.play_button.isEnabled()
+    with patch('flowtape.ui.open_edge') as launch:
+        assert not window._new_playback()
+    launch.assert_not_called()

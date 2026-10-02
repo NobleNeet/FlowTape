@@ -984,7 +984,7 @@ class FlowTapeWindow(QMainWindow):
                 self.transport.set_pages(self.registry['pages'])
             self.transport.inject('observe')
             self.controller = None
-            self.confirmed_destructive = self.record_after_play = False
+            self.confirmed_destructive = False
             self.timer.start()
             self.status.setText("Edge 起動済み")
             self.browser_status.setText("Browser: ready — Edge 接続済み")
@@ -1515,16 +1515,23 @@ class FlowTapeWindow(QMainWindow):
             return False
 
     def _new_playback(self):
-        if self.scenario is None or self.driver is None or self.config is None: return False
+        if self.scenario is None or self.config is None: return False
         self.stop_record()
         if self.pending_operation or self.operation_queue or self.recorder_error:
             self.status.setText('保留中の記録を確定または破棄してから再生してください')
             return False
         self.picking = False
+        if self.driver is not None:
+            try:
+                if not self.driver.window_handles:
+                    raise RuntimeError('controlled browser has no surviving windows')
+            except Exception:
+                self.shutdown_browser()
         self.open_browser()
         if not self.driver:
             return False
-        self.transport.inject('observe')
+        if isinstance(self.transport, RecorderTransport): self.transport.prepare_playback()
+        else: self.transport.inject('observe')
         schema.scenario(self.scenario)
         schema.validate_package(self.scenario, self.registry)
         self.confirmed_destructive = False
